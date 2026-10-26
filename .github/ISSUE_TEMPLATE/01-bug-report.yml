@@ -8,6 +8,10 @@ body:
       value: |
         Thank you for reporting a bug.
 
+        We recommend a Conventional Commits-style title, normally with a
+        scope, for example `fix(ui): correct constraint editor behavior`.
+        If you cannot identify an appropriate scope, you may omit it.
+
         Do not report security vulnerabilities here. Follow the
         instructions in SECURITY.md to report them privately.
 
