@@ -1,3 +1,8 @@
+<!--
+PR title: use Conventional Commits style, normally with a scope: <type>(<scope>): <description>.
+Examples: feat(core): implement candidate evaluation; docs(github): define issue and pull request conventions.
+Omit the scope only when no suitable scope exists, e.g. chore: initialize repository.
+-->
 
 ## Summary
 

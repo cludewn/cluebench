@@ -8,6 +8,10 @@ body:
       value: |
         Thank you for suggesting an improvement.
 
+        We recommend a Conventional Commits-style title, normally with a
+        scope, for example `feat(core): support additional constraint types`.
+        If you cannot identify an appropriate scope, you may omit it.
+
         Describe the problem you want to solve. You do not need
         to know how the feature should be implemented.
 
