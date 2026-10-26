@@ -1,0 +1,32 @@
+# Rust / Tauri
+/target/
+**/target/
+
+# Node / frontend
+**/node_modules/
+**/dist/
+**/.vite/
+**/coverage/
+
+# Secrets and machine-specific files
+.env
+.env.*
+!.env.example
+*.local
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Non-public local notes (ideally stored outside the repository)
+/private/
+/scratch/
+/local-notes/
+/password_guessing_tool_design_concept.md
+/password_guessing_domain_constraint_ir_v*.md
+/password_guessing_mvp_scenarios_v*.md
+/cluebench_design_concept_v*.md
+/cluebench_domain_constraint_ir_v*.md
+/cluebench_mvp_scenarios_v*.md
+/cluebench_product_overview_final_*.md
+/password_clue_core_poc/
