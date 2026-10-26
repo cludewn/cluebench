@@ -32,9 +32,16 @@ Cluebench is an early-stage, local-first desktop workbench for reasoning about p
 - Do not generate unbounded dictionaries, block the UI on large computations, or log passwords/seeds.
 - No remote login automation, credential stuffing, CAPTCHA bypass, or nonconsensual personal-data collection.
 
+## Git and GitHub operations
+
+- The developer normally runs `git add`, `git commit`, and `git push` in WSL bash, and creates and merges pull requests through GitHub Web.
+- Implementation or file-editing requests do not authorize staging, committing, or pushing. Do not automatically include routine commits in Codex implementation tasks.
+- AI agents, including Codex, may stage or commit only when there is a reasonable need to delegate the operation (for example, complex partial staging) and the developer explicitly authorizes that specific operation. Permission to commit does not authorize pushing.
+- Amending commits, rewriting history, pushing (including force pushes), or modifying any GitHub state (including branches, commits, issues, pull requests, and settings) each requires explicit authorization for the specific operation. This also applies to PR creation and merging.
+- Keep Git command guidance proportionate to the task; do not add large sets of unnecessary inspection commands for simple operations.
+
 ## GitHub titles and templates
 
-- GitHub operations are normally performed by the developer. AI agents must not modify branches, commits, issues, pull requests, settings, or other state on GitHub without explicit authorization for each specific operation.
 - **Commits, issues, and pull requests authored by maintainers or coding agents must use Conventional Commits-style titles**, normally with a scope: `<type>(<scope>): <description>`. Although the scope is syntactically optional, Cluebench permits `<type>: <description>` only when no suitable scope exists, such as for repository-wide initialization (`chore: initialize repository`). Do not invent a scope just to fill the field.
 - Use a meaningful type such as `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, or `chore`. Use a concise English description that reflects the change or issue. Example titles:
   - `feat(core): implement candidate evaluation`
@@ -51,6 +58,20 @@ Cluebench is an early-stage, local-first desktop workbench for reasoning about p
 
 - Prefer small, reviewable work items and focused pull requests.
 - Before implementing a disputed technical detail, identify the unresolved decision and present alternatives with tradeoffs.
-- Record only tests and validations that actually ran; never report a pass without execution.
 - The earlier, unverified Rust PoC is reference material, **not approved source code**. Review it before adopting any implementation.
 - Do not add large dependency stacks, node editors, a CLI, external API guarantees, or a full desktop scaffold solely to make the repository look complete.
+
+## Verification
+
+- Run the checks needed for the change with the available development environment. Do not add commands or verification steps merely to make the report look more thorough.
+- Report `PASS` only for checks actually executed successfully. Distinguish static review findings from executed compilation, tests, linting, and other checks.
+- Disclose failed checks and unresolved issues. For important checks that could not be run, state what was not run, why, and what remains unverified.
+- Never include real passwords, credentials, or sensitive clue data in test data or reports.
+
+## Final reports
+
+- At task completion, report in Japanese according to the language policy above, with enough detail for a third party to understand the change without rereading every diff. Explain what significant changes do and their effects; file lists or vague claims such as "implemented" or "all PASS" are insufficient.
+- Normally include the verdict (such as `PASS` or `CHANGES REQUIRED`), each changed file's main changes and effects, added/updated/removed dependencies (explicitly state when none), and the main commands run.
+- Report successful checks and their results, failed checks and their impact, and important checks not run with reasons and remaining unknowns, following the verification rules above.
+- Explain material design decisions, constraints, remaining work, known risks, and the precise Git state, distinguishing uncommitted changes, local commits, and pushed commits.
+- Scale the report to the task. For small changes, combine nonapplicable items and avoid an excessive fixed template.
