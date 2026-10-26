@@ -49,7 +49,11 @@ Cluebench is an early-stage, local-first desktop workbench for reasoning about p
   - `docs(github): define issue and pull request conventions`
   - `ci(rust): add core verification workflow`
 - Conventional Commits formally defines **commit messages**; applying the same title convention to issues and PRs is a **Cluebench project rule**.
-- **Always consult and follow the current repository templates** when preparing issues or pull requests; do not rely on remembered or example templates. Use `.github/ISSUE_TEMPLATE/01-bug-report.yml` for bugs, `02-feature-request.yml` for features, and a blank issue for other work such as design, research, or internal tasks. Do not force unrelated work into the wrong form.
+- **Always consult and follow the current repository templates** when preparing issues or pull requests; do not rely on remembered or example templates. Choose issue types by purpose, not by author. Do not force unrelated work into the wrong template.
+  - Bug report (`.github/ISSUE_TEMPLATE/01-bug-report.yml`): report a defect in existing functionality.
+  - Feature request (`.github/ISSUE_TEMPLATE/02-feature-request.yml`): propose a new feature or improvement.
+  - Development task (`.github/ISSUE_TEMPLATE/03-development-task.md`): track a development task with a defined implementation scope and acceptance criteria, such as implementing a new feature, refactoring, or maintenance.
+  - Blank issue: use a free-form issue for research, design discussions, or similar work.
 - PR descriptions must follow `.github/pull_request_template.md`, preserve its required structure, link relevant issues, and report only verification that actually occurred (including checks not run and why). Remove optional sections only when they do not apply.
 - When a tool does not present the GitHub forms automatically, reproduce the relevant template sections manually.
 - Do not reject good-faith external contributions solely for a title-format discrepancy; maintainers can help normalize titles before merging.
