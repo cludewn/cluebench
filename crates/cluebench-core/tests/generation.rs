@@ -290,7 +290,7 @@ fn deterministic_order_matches_the_fixed_seed_case_prefix_suffix_sequence() {
         (2, 1, 0),
         (2, 1, 1),
     ];
-    for (seed_index, chunk) in records.chunks_exact(12).enumerate() {
+    for (seed_index, chunk) in records.as_chunks::<12>().0.iter().enumerate() {
         for (record, &(case_index, prefix_index, suffix_index)) in chunk.iter().zip(&expected_paths)
         {
             assert_eq!(record.seed_id, [Id(20), Id(10)][seed_index]);
@@ -327,8 +327,8 @@ fn duplicate_strings_preserve_every_seed_case_and_affix_path() {
     assert_eq!(reason, GenerationStop::Completed);
     assert_eq!(stats.attempted_paths, 24);
     assert_eq!(stats.emitted_candidates, 24);
-    for (seed_index, seed_records) in records.chunks_exact(12).enumerate() {
-        for (case_index, case_records) in seed_records.chunks_exact(4).enumerate() {
+    for (seed_index, seed_records) in records.as_chunks::<12>().0.iter().enumerate() {
+        for (case_index, case_records) in seed_records.as_chunks::<4>().0.iter().enumerate() {
             assert_eq!(
                 case_records
                     .iter()
