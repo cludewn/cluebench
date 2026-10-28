@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! UI-independent validation, resolution, candidate evaluation, and bounded analysis.
+//! UI-independent validation, resolution, evaluation, bounded analysis and generation.
 //!
 //! Only validated projects can be resolved and evaluated. The API is internal
 //! product infrastructure; external API stability is not promised.
@@ -79,6 +79,7 @@
 
 mod analysis;
 mod evaluation;
+mod generation;
 pub mod limits;
 mod matching;
 mod model;
@@ -91,6 +92,10 @@ pub use analysis::{
     VerifiedWitness,
 };
 pub use evaluation::{CandidateError, Evaluation};
+pub use generation::{
+    CaseVariant, GeneratedCandidate, GenerationConfig, GenerationConfigError,
+    GenerationConfigErrorCode, GenerationPath, GenerationResult, GenerationStats, GenerationStop,
+};
 pub use model::*;
 pub use resolution::{ResolvedConstraint, ResolvedModel, ResolvedSeed};
 pub use validation::{Diagnostic, DiagnosticCode, ValidatedProject, ValidationErrors};

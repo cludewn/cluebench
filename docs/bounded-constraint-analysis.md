@@ -218,6 +218,8 @@ their overlap and its Space witness fails. Likewise, character-class upper-bound
 interactions and general substring placement are not solved. Absence of a known
 conflict is not a satisfiability proof.
 
-This feature adds no candidate generator, seed transformation, preview, wordlist
-export, cardinality calculation, minimum UNSAT core, repair engine, persistence,
-GUI, background job manager, CLI, HTTP API, Unicode domain, or SAT/SMT framework.
+Analysis itself adds no candidate generator or seed transformation. The separate
+[bounded seed generator](bounded-seed-generation.md) does not depend on analysis
+outcomes. There is no preview UI, wordlist export, cardinality calculation,
+minimum UNSAT core, repair engine, persistence, GUI, background job manager, CLI,
+HTTP API, Unicode domain, or SAT/SMT framework.

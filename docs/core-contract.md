@@ -3,7 +3,9 @@
 The `cluebench-core` crate implements the domain validation, scenario resolution,
 and deterministic candidate evaluation defined by [Issue #3](https://github.com/cludewn/cluebench/issues/3),
 plus [bounded constraint analysis](bounded-constraint-analysis.md) from
-[Issue #5](https://github.com/cludewn/cluebench/issues/5).
+[Issue #5](https://github.com/cludewn/cluebench/issues/5) and
+[bounded seed-based generation](bounded-seed-generation.md) from
+[Issue #7](https://github.com/cludewn/cluebench/issues/7).
 It has no UI or third-party dependencies. Its Rust API is an internal application
 boundary, with no external stability guarantee.
 
@@ -13,6 +15,7 @@ boundary, with no external stability guarantee.
 RawProject -> validate() -> ValidatedProject -> resolve() -> ResolvedModel
 ResolvedModel -> evaluate(candidate)
 ResolvedModel -> analyze(config, cancel)
+ResolvedModel -> generate(config, cancel, consumer) -> incremental eligible candidates
 ```
 
 `RawProject` contains editable input. Validation consumes it, checks all saved
@@ -20,7 +23,8 @@ entities, and returns either bounded diagnostics or a `ValidatedProject` with
 private state. Validated data has read-only access; changing input requires a new
 validation. Resolution borrows the validated data and builds the active scenario.
 `ResolvedModel` also has private state and can only be created through resolution.
-Candidate evaluation and constraint analysis are available only on this model.
+Candidate evaluation, constraint analysis, and generation are available only on
+this model.
 No unchecked constructor, mutable validated-data accessor, or public stand-alone
 matcher bypasses validation.
 
@@ -90,7 +94,8 @@ bytes. An unsupported-byte diagnostic uses a zero-based byte offset; Position
 constraints use one-based positions.
 
 Initial seed text and constraint literals also contain 1–64 printable ASCII
-bytes. This restricts input; it does not generate or transform candidates. Clue
+bytes. Generation adds only the explicitly configured case and affix options;
+see its [contract](bounded-seed-generation.md). Clue
 text, source information, and interpretation may use Unicode within the UTF-8
 resource limits below.
 
@@ -193,8 +198,10 @@ input. No loader or IPC implementation is included here.
 
 Structural analysis provides only the bounded deductions and verified witnesses
 documented in [bounded constraint analysis](bounded-constraint-analysis.md).
-There is no complete constraint solver, candidate generation, seed transformation,
-preview, wordlist export, serialization, migration, persistence, GUI, CLI, HTTP
+Generation provides bounded, nonrecursive case and affix transformations with
+incremental Hard-eligible delivery; its completion does not imply exhaustive
+candidate-domain exploration. There is no complete constraint solver, candidate
+preview UI, wordlist export, serialization, migration, persistence, GUI, CLI, HTTP
 API, or general SAT/SMT framework. The crate does not test passwords against hashes
 or services. Later MVP work can use this validated core without treating these
 missing capabilities as implemented.

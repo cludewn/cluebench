@@ -4,7 +4,7 @@ Cluebench is a planned local-first desktop application for organizing incomplete
 
 Cluebench is intended for CTF challenges, recovery of passwords you own, and explicitly authorized security analysis. It is **not** a password cracking engine, and it will not automate login attempts against remote services.
 
-> **Project status:** Rust core implemented: domain validation, hypothesis resolution, candidate evaluation, and bounded constraint analysis with verified witnesses or traceable contradiction evidence. The desktop application and remaining MVP features are **not implemented or released yet**.
+> **Project status:** Rust core implemented: domain validation, hypothesis resolution, candidate evaluation, bounded constraint analysis with verified witnesses or traceable contradiction evidence, and bounded seed-based generation with incremental delivery and provenance. The desktop application, candidate preview UI, wordlist export, and other remaining MVP features are **not implemented or released yet**.
 
 ## What makes Cluebench different?
 
@@ -28,6 +28,8 @@ The goal is not to outperform hashcat or John the Ripper in password verificatio
 - **CLI / stable public Rust library API / HTTP API:** Outside the MVP scope.
 
 See [product scope](docs/product-scope.md) for the agreed MVP boundaries. The UI-independent [Rust core contract](docs/core-contract.md) documents the implemented semantics, resource limits, and local verification commands. There is no runnable desktop application yet.
+
+The [seed-generation contract](docs/bounded-seed-generation.md) documents case and fixed-affix transformations, deterministic path ordering, independent attempt/output limits, cancellation, and privacy guarantees. Generation is independent of structural analysis; finding no eligible candidates does not prove unsatisfiability.
 
 ## Privacy and responsible use
 
