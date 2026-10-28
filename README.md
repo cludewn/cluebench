@@ -4,7 +4,7 @@ Cluebench is a planned local-first desktop application for organizing incomplete
 
 Cluebench is intended for CTF challenges, recovery of passwords you own, and explicitly authorized security analysis. It is **not** a password cracking engine, and it will not automate login attempts against remote services.
 
-> **Project status:** Initial Rust core implemented: domain validation, hypothesis resolution, and candidate evaluation. The desktop application and remaining MVP features are **not implemented or released yet**.
+> **Project status:** Rust core implemented: domain validation, hypothesis resolution, candidate evaluation, and bounded constraint analysis with verified witnesses or traceable contradiction evidence. The desktop application and remaining MVP features are **not implemented or released yet**.
 
 ## What makes Cluebench different?
 
