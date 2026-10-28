@@ -2,10 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::fmt;
+use std::{convert::Infallible, fmt};
 
 use crate::limits::{MAX_CANDIDATE_BYTES, MAX_HYPOTHESES, MAX_SOFT_POINTS};
-use crate::{Applicability, CharacterClass, Constraint, Effect, Id, ResolvedModel};
+use crate::{Applicability, Constraint, Effect, Id, ResolvedModel};
 
 // Changing the population limit requires updating the documented score bound.
 const _: () = assert!(MAX_HYPOTHESES <= u32::MAX as usize / 3);
@@ -105,32 +105,10 @@ impl ResolvedModel<'_> {
 }
 
 fn matches_constraint(constraint: &Constraint, candidate: &str) -> bool {
-    match constraint {
-        Constraint::Length { min, max } => (*min..=*max).contains(&candidate.len()),
-        Constraint::Position { index, allowed } => candidate
-            .as_bytes()
-            .get(index - 1)
-            .is_some_and(|byte| allowed.as_bytes().contains(byte)),
-        Constraint::Contains(literal) => candidate.contains(literal.as_str()),
-        Constraint::NotContains(literal) => !candidate.contains(literal.as_str()),
-        Constraint::Prefix(literal) => candidate.starts_with(literal),
-        Constraint::Suffix(literal) => candidate.ends_with(literal),
-        Constraint::CharacterCount { class, min, max } => {
-            let count = candidate
-                .bytes()
-                .filter(|byte| character_class(*byte) == *class)
-                .count();
-            (*min..=*max).contains(&count)
-        }
-    }
-}
-
-fn character_class(byte: u8) -> CharacterClass {
-    match byte {
-        b'a'..=b'z' => CharacterClass::Lowercase,
-        b'A'..=b'Z' => CharacterClass::Uppercase,
-        b'0'..=b'9' => CharacterClass::Digit,
-        b' ' => CharacterClass::Space,
-        _ => CharacterClass::Symbol,
+    match crate::matching::matches_constraint(constraint, candidate, &mut |_| {
+        Ok::<(), Infallible>(())
+    }) {
+        Ok(matched) => matched,
+        Err(never) => match never {},
     }
 }

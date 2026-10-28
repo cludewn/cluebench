@@ -1,14 +1,18 @@
 # Initial Rust core contract
 
 The `cluebench-core` crate implements the domain validation, scenario resolution,
-and deterministic candidate evaluation defined by [Issue #3](https://github.com/cludewn/cluebench/issues/3).
+and deterministic candidate evaluation defined by [Issue #3](https://github.com/cludewn/cluebench/issues/3),
+plus [bounded constraint analysis](bounded-constraint-analysis.md) from
+[Issue #5](https://github.com/cludewn/cluebench/issues/5).
 It has no UI or third-party dependencies. Its Rust API is an internal application
 boundary, with no external stability guarantee.
 
 ## Data flow and ownership
 
 ```text
-RawProject -> validate() -> ValidatedProject -> resolve() -> ResolvedModel -> evaluate(candidate)
+RawProject -> validate() -> ValidatedProject -> resolve() -> ResolvedModel
+ResolvedModel -> evaluate(candidate)
+ResolvedModel -> analyze(config, cancel)
 ```
 
 `RawProject` contains editable input. Validation consumes it, checks all saved
@@ -16,8 +20,9 @@ entities, and returns either bounded diagnostics or a `ValidatedProject` with
 private state. Validated data has read-only access; changing input requires a new
 validation. Resolution borrows the validated data and builds the active scenario.
 `ResolvedModel` also has private state and can only be created through resolution.
-Candidate evaluation is available only on this model. No unchecked constructor,
-mutable validated-data accessor, or public stand-alone matcher bypasses validation.
+Candidate evaluation and constraint analysis are available only on this model.
+No unchecked constructor, mutable validated-data accessor, or public stand-alone
+matcher bypasses validation.
 
 The root Cargo workspace currently contains one crate under
 `crates/cluebench-core`; further crates can be added when needed. From the
@@ -186,9 +191,10 @@ input. No loader or IPC implementation is included here.
 
 ## Current exclusions
 
-There is no structural satisfiability analysis, contradiction explanation,
-candidate generation, seed transformation, preview, wordlist export,
-serialization, migration, persistence, GUI, CLI, HTTP API, or general SAT/SMT
-framework. The crate does not test passwords against hashes or services. Later
-MVP work can use this validated core without treating these missing capabilities
-as implemented.
+Structural analysis provides only the bounded deductions and verified witnesses
+documented in [bounded constraint analysis](bounded-constraint-analysis.md).
+There is no complete constraint solver, candidate generation, seed transformation,
+preview, wordlist export, serialization, migration, persistence, GUI, CLI, HTTP
+API, or general SAT/SMT framework. The crate does not test passwords against hashes
+or services. Later MVP work can use this validated core without treating these
+missing capabilities as implemented.
