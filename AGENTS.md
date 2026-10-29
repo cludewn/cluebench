@@ -8,7 +8,7 @@ Cluebench is an early-stage, local-first desktop workbench for reasoning about p
 
 - Use clear, concise, idiomatic **English** for committed files, code, identifiers, comments, documentation, commit messages, Issues, and PRs.
 - Respond to the developer and provide review reports in **Japanese**, unless instructed otherwise.
-- The canonical README is in English; keep `README.ja.md` aligned for material changes.
+- The canonical README is in English; keep `README-ja.md` aligned for material changes.
 - Private Japanese design notes may be kept locally under the Git-ignored `.local/` directory. They are **not repository artifacts**: never stage, commit, or publish them, their logs, actual credentials, or private clue data.
 
 ## Confirmed product decisions
@@ -16,7 +16,7 @@ Cluebench is an early-stage, local-first desktop workbench for reasoning about p
 - Product name: **Cluebench**.
 - Tagline: **A visual workbench for password clues and candidate exploration.**
 - License: **MPL-2.0**. Use appropriate source-file license headers for new code and respect dependency licenses.
-- Rust core, React + TypeScript frontend. Tauri 2 is a candidate, **not yet approved**.
+- Rust core, React + TypeScript frontend, and Tauri 2 desktop adapter. Keep the core UI-independent; see `docs/desktop-verification.md` for verified environments.
 - The MVP must not depend on runtime AI/LLMs. This restriction is not a permanent product-wide ban on future AI features.
 - Manual candidate seeds, limited transformations, and bounded candidate preview **are MVP requirements**.
 - CLI, HTTP API, and stable external Rust API are **out of MVP scope**.

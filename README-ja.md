@@ -4,7 +4,7 @@ Cluebenchは、断片的・不確実なパスワードの手がかりを整理�
 
 CTF、本人のパスワード復旧、明示的に許可されたセキュリティ分析を主な用途とします。パスワードの検証・クラッキングエンジン自体を提供したり、オンライン認証への自動試行を行ったりすることは目的としません。
 
-> **現在の状況：** Rust Coreに、ドメイン検証・仮説の有効化・候補評価、検証済みwitnessまたは追跡可能な矛盾証拠を返す限定的な制約解析と、由来を保持して候補を逐次配送する上限付きseedベース生成を実装しています。デスクトップアプリケーション、候補プレビューUI、wordlist出力と残りのMVP機能は、まだ実装・リリースされていません。
+> **現在の状況：** Rust Coreに、ドメイン検証・仮説の有効化・候補評価、限定的な制約解析と、由来を保持する上限付きseedベース生成を実装しています。最初のTauri 2 Desktop Shellは、React画面と合成データによる読み取り専用のCore接続確認を提供します。手がかり編集・候補プレビューUI・wordlist出力・永続化と残りのMVPワークフローは、まだ実装・リリースされていません。環境別の検証状況は[Desktop検証報告（英語）](docs/desktop-verification.md)を参照してください。
 
 ## Cluebenchの中心的な考え方
 
@@ -17,11 +17,20 @@ CTF、本人のパスワード復旧、明示的に許可されたセキュリ�
 
 ## 技術方針
 
-Rust Core、React + TypeScriptフロントエンドを使用し、CoreはUIから独立させます。Tauri 2は有力候補ですが、正式採用前です。MVPには実行時AIを搭載しません。CLI、外部向け安定Rust API、HTTP APIはMVPの対象外です。
+Rust Core、React + TypeScriptフロントエンドを使用し、CoreはUIから独立させます。Desktop ShellにはTauri 2を採用し、小さなRust adapterから既存Coreを呼び出します。MVPには実行時AIを搭載しません。CLI、外部向け安定Rust API、HTTP APIはMVPの対象外です。
 
 MVPの範囲は[製品スコープ（英語）](docs/product-scope.md)を参照してください。
 
-実装済みの意味論・資源上限・ローカル検証コマンドは[Rust Coreの技術契約（英語）](docs/core-contract.md)に記載しています。実行可能なデスクトップアプリケーションはまだありません。
+実装済みの意味論・資源上限は[Rust Coreの技術契約（英語）](docs/core-contract.md)、Linux/WSL2とWindows nativeの必要環境・構成・権限・検証コマンドは[Desktop開発ガイド（英語）](docs/desktop-development.md)に記載しています。
+
+ガイドのnative依存、`apps/desktop/.node-version`のNode.js、`apps/desktop/package.json`のpnpmを導入した後、次で起動します。
+
+```sh
+pnpm -C apps/desktop install --frozen-lockfile
+pnpm -C apps/desktop tauri dev
+```
+
+Shellは合成データのみを使い、パスワード入力は受け付けません。`pnpm -C apps/desktop dev`はFrontend単独起動で、接続確認はDesktop未接続を表示します。現時点のUIは英語のみで、英日対応は今後の予定です。
 
 [Seed生成の技術契約（英語）](docs/bounded-seed-generation.md)では、大小文字変換・固定prefix/suffix、決定的な経路順序、独立した試行数・配送数上限、キャンセル、プライバシー保証を説明しています。生成処理は構造解析と独立しており、候補が見つからなくても充足不能の証明にはなりません。
 

@@ -1,0 +1,111 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+:root {
+  font-family: system-ui, sans-serif;
+  color: #1e2933;
+  background: #f4f6f8;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  line-height: 1.6;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+main {
+  max-width: 660px;
+  margin: 0 auto;
+  padding: 48px 28px;
+}
+
+h1,
+h2,
+p {
+  margin: 0 0 16px;
+}
+
+h1 {
+  font-size: 2.4rem;
+  line-height: 1.2;
+}
+
+h2 {
+  font-size: 1.2rem;
+}
+
+.eyebrow {
+  color: #52616f;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tagline,
+footer {
+  color: #52616f;
+}
+
+.connection {
+  margin: 32px 0;
+  padding: 24px;
+  border: 1px solid #d4dce3;
+  border-radius: 10px;
+  background: #fff;
+}
+
+button {
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 6px;
+  background: #194f78;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+button:focus-visible {
+  outline: 3px solid #527fa3;
+  outline-offset: 3px;
+}
+
+[role="status"] {
+  margin-top: 20px;
+  min-height: 26px;
+}
+
+[role="status"] p:last-child {
+  margin-bottom: 0;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 16px;
+  margin: 0;
+}
+
+dd {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+}
+
+.success {
+  color: #256140;
+}
+
+.error {
+  color: #a32929;
+}
+
+footer {
+  font-size: 0.9rem;
+}
