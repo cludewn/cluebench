@@ -45,4 +45,4 @@ Do not confuse structural satisfiability with candidates found by one generation
 
 ## Open technical decisions
 
-Tauri 2 selection, exact persistence and encryption policy, platform packaging, UI layout, detailed solver guarantees, memory limits, and release process remain open. Document decisions as the implementation validates them.
+Tauri 2 is adopted for the initial [desktop shell](desktop-development.md), with a small Rust adapter to the UI-independent Core. This shell verifies a synthetic Core operation; it does not implement the MVP workflow. Exact persistence and encryption policy, platform packaging, product UI layout, further solver guarantees, memory limits, and release process remain open. See the [verification report](desktop-verification.md) for platform evidence.

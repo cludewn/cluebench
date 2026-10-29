@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-probe",
+  "description": "Allow only the main local application window to run the synthetic Core probe.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": ["allow-core-probe"]
+}

@@ -28,14 +28,25 @@ this model.
 No unchecked constructor, mutable validated-data accessor, or public stand-alone
 matcher bypasses validation.
 
-The root Cargo workspace currently contains one crate under
-`crates/cluebench-core`; further crates can be added when needed. From the
-repository root, run:
+The root Cargo workspace contains `crates/cluebench-core` and the desktop adapter
+at `apps/desktop/src-tauri`, sharing the root `Cargo.lock`. The Core still has
+no third-party dependencies. Core-only verification needs no frontend assets
+or desktop system libraries:
 
 ```sh
+cargo test -p cluebench-core --locked
+```
+
+Full workspace checks also compile the Tauri adapter and require the native
+dependencies in the [desktop guide](desktop-development.md) and built frontend
+assets. From the repository root, run:
+
+```sh
+pnpm -C apps/desktop install --frozen-lockfile
+pnpm -C apps/desktop build
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 ```
 
 ## Domain relationships
@@ -201,7 +212,8 @@ documented in [bounded constraint analysis](bounded-constraint-analysis.md).
 Generation provides bounded, nonrecursive case and affix transformations with
 incremental Hard-eligible delivery; its completion does not imply exhaustive
 candidate-domain exploration. There is no complete constraint solver, candidate
-preview UI, wordlist export, serialization, migration, persistence, GUI, CLI, HTTP
+preview UI, wordlist export, serialization, migration, persistence, CLI, HTTP
 API, or general SAT/SMT framework. The crate does not test passwords against hashes
 or services. Later MVP work can use this validated core without treating these
-missing capabilities as implemented.
+missing capabilities as implemented. The separate [desktop shell](desktop-development.md)
+adds only a synthetic Core connection check through Tauri IPC.

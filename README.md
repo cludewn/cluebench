@@ -1,10 +1,10 @@
 # Cluebench
 
-Cluebench is a planned local-first desktop application for organizing incomplete or uncertain password clues, exploring alternative interpretations, and turning selected hypotheses into constraints and candidate-generation strategies.
+Cluebench is an early-stage local-first desktop application for organizing incomplete or uncertain password clues, exploring alternative interpretations, and turning selected hypotheses into constraints and candidate-generation strategies.
 
 Cluebench is intended for CTF challenges, recovery of passwords you own, and explicitly authorized security analysis. It is **not** a password cracking engine, and it will not automate login attempts against remote services.
 
-> **Project status:** Rust core implemented: domain validation, hypothesis resolution, candidate evaluation, bounded constraint analysis with verified witnesses or traceable contradiction evidence, and bounded seed-based generation with incremental delivery and provenance. The desktop application, candidate preview UI, wordlist export, and other remaining MVP features are **not implemented or released yet**.
+> **Project status:** The Rust core implements domain validation, hypothesis resolution, candidate evaluation, bounded constraint analysis, and bounded seed-based generation with provenance. The first Tauri 2 desktop shell provides a React interface and a read-only, synthetic Core connection check. Clue editing, candidate preview UI, wordlist export, persistence, and the remaining MVP workflow are **not implemented or released yet**. Platform verification is recorded in the [desktop verification report](docs/desktop-verification.md).
 
 ## What makes Cluebench different?
 
@@ -23,11 +23,20 @@ The goal is not to outperform hashcat or John the Ripper in password verificatio
 - **Product strategy:** Application-first, library-ready.
 - **Core:** Rust, kept independent of the desktop UI.
 - **Frontend:** React and TypeScript.
-- **Desktop shell:** Tauri 2 is under evaluation, not yet a final choice.
+- **Desktop shell:** Tauri 2, connecting the frontend to a small Rust adapter and the existing Core.
 - **MVP:** No runtime AI/LLM dependency; later options remain open.
 - **CLI / stable public Rust library API / HTTP API:** Outside the MVP scope.
 
-See [product scope](docs/product-scope.md) for the agreed MVP boundaries. The UI-independent [Rust core contract](docs/core-contract.md) documents the implemented semantics, resource limits, and local verification commands. There is no runnable desktop application yet.
+See [product scope](docs/product-scope.md) for the agreed MVP boundaries. The UI-independent [Rust core contract](docs/core-contract.md) documents the implemented semantics and resource limits. The [desktop development guide](docs/desktop-development.md) covers Linux/WSL2 and native Windows prerequisites, architecture, permissions, and verification commands.
+
+With the documented native prerequisites, Node.js version from `apps/desktop/.node-version`, and pnpm version from `apps/desktop/package.json` installed:
+
+```sh
+pnpm -C apps/desktop install --frozen-lockfile
+pnpm -C apps/desktop tauri dev
+```
+
+The desktop shell checks Core connectivity using synthetic data; it does not accept password data. `pnpm -C apps/desktop dev` starts only the frontend development server, where the connection check reports that the desktop is unavailable.
 
 The [seed-generation contract](docs/bounded-seed-generation.md) documents case and fixed-affix transformations, deterministic path ordering, independent attempt/output limits, cancellation, and privacy guarantees. Generation is independent of structural analysis; finding no eligible candidates does not prove unsatisfiability.
 
@@ -37,7 +46,7 @@ Clues, candidate seeds, and project files may contain sensitive information. Do 
 
 ## Language
 
-English is the primary language for repository artifacts. A [Japanese README](README.ja.md) is also available. The user interface is planned to support English and Japanese.
+English is the primary language for repository artifacts. A [Japanese README](README-ja.md) is also available. The shell currently uses English; full English/Japanese UI support remains planned.
 
 ## License
 
