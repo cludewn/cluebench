@@ -5,7 +5,8 @@ by Vite. Tauri connects the existing Rust Core directly to the webview in the
 same native process. It avoids introducing a server or a second Core process and
 keeps the domain implementation reusable outside the UI. This is an application
 foundation, not the completed MVP. Recorded execution results and remaining
-checks are in [desktop verification](desktop-verification.md).
+checks are in [Issue #12 verification](candidate-preview-verification.md);
+[Issue #9 verification](desktop-verification.md) preserves the earlier shell record.
 
 ## Architecture and layout
 
@@ -13,8 +14,11 @@ checks are in [desktop verification](desktop-verification.md).
 React / TypeScript -> Tauri IPC -> Desktop Rust adapter -> cluebench-core
 
 apps/desktop/
-  src/App.tsx                 Minimal connection-check UI
-  src/core-bridge.ts          Command name, response validation, safe errors
+  src/App.tsx                 Candidate Preview and auxiliary Core probe
+  src/preview-input.ts        Seed grammar, input bounds, request construction
+  src/preview-bridge.ts       Raw request encoding, response checks, safe errors
+  src/core-bridge.ts          Auxiliary probe bridge and safe errors
+  src-tauri/src/preview.rs    Bounded worker, DTOs, Core generation, single-flight
   src-tauri/src/probe.rs      Synthetic Core operation and small response DTO
   src-tauri/src/lib.rs        Command registration and application startup
   src-tauri/build.rs          Tauri build and custom-command ACL registration
@@ -76,8 +80,8 @@ metadata and downloaded Cargo manifests:
 | --- | --- | --- | --- |
 | `tauri` | 2.12.5 | Native window, webview, IPC | MIT OR Apache-2.0 |
 | `tauri-build` | 2.7.4 | Build-time config, assets, ACL | MIT OR Apache-2.0 |
-| `serde` | 1.0.229 | Small response/error serialization | MIT OR Apache-2.0 |
-| `serde_json` | 1.0.154 | Rust test assertions | MIT OR Apache-2.0 |
+| `serde` | 1.0.229 | Preview request/response/error serialization | MIT OR Apache-2.0 |
+| `serde_json` | 1.0.154 | Preview JSON parsing/serialization and test assertions | MIT OR Apache-2.0 |
 | `@tauri-apps/api`, `@tauri-apps/cli` | 2.12.4 | Supported JS IPC API and native build CLI | MIT OR Apache-2.0 |
 | `react`, `react-dom` | 19.3.1 | SPA rendering and local UI state | MIT |
 | `typescript` | 7.0.2 | Static type checking | Apache-2.0 |
@@ -199,12 +203,20 @@ Tauri runs `pnpm dev` and opens the `main` window. Vite binds to
 `http://localhost:1420`; Tauri's `devUrl` matches it, and `strictPort` makes a
 port conflict fail visibly. To inspect the frontend alone, run
 `pnpm -C apps/desktop dev` and open that URL in a browser. Clicking the check
-there reports an unavailable Desktop connection; it never fabricates a Core
-success.
+or Preview there reports an unavailable Desktop connection; it never fabricates
+Core output.
 
-## Core probe and UI states
+## Candidate Preview and auxiliary probe
 
-The only custom command, `core_probe`, takes no frontend input. It constructs a
+Candidate Preview is the primary screen. It accepts ordered manual seed lines,
+explicit case transformations and prefix/suffix lists, and independent attempt
+and emission limits. The [Preview contract](bounded-candidate-preview.md)
+defines the exact input grammar, all resource limits, DTOs, one-shot Raw IPC,
+blocking worker and single-flight ownership, request/revision handling, safe
+errors, statistics/stop semantics, and privacy limitations. No interactive
+cancellation or export is provided.
+
+The auxiliary custom command, `core_probe`, takes no frontend input. It constructs a
 fixed synthetic `RawProject` containing one enabled, manual-origin Hard
 hypothesis with a Length constraint of 2 through 4. It calls `validate()`,
 `resolve()`, and `evaluate()` on the synthetic cases `"abc"` and `"a"`.
@@ -226,18 +238,19 @@ fields, translates recognized codes to fixed messages, and replaces arbitrary
 IPC rejection content with a safe fallback. A TypeScript generic is not treated
 as runtime validation.
 
-The React screen identifies Cluebench, explains the synthetic check, and moves
-through Idle -> Loading -> Success/Error. Loading disables the action; either
-outcome allows another attempt. The result displays both booleans. The footer
-states that clue editing, candidate preview, and wordlist export are unavailable.
+The auxiliary probe displays both booleans with independent connection states.
+The primary Preview distinguishes Idle, Invalid, Loading, Success, Empty,
+Limited, and Error. Empty/Limited may coexist; Core termination is shown
+separately. Editing or Clear invalidates results while the outstanding request
+continues to hold Loading until its Promise settles. The footer identifies
+remaining editors, persistence, and export as unavailable.
 
 ## Command ACL, CSP, and privacy
 
 Registering an `invoke_handler` alone does not limit custom commands by window.
-`build.rs` explicitly enrolls `core_probe` with
-`tauri_build::AppManifest::commands`, generating `allow-core-probe` and its deny
-permission during the build. `capabilities/main-probe.json` grants only
-`allow-core-probe`, only to the exact window label `main`, and only for local
+`build.rs` explicitly enrolls `core_probe` and `candidate_preview` with
+`tauri_build::AppManifest::commands`, generating their allow/deny permissions during the build. `capabilities/main-probe.json` grants only
+`allow-core-probe` and `allow-candidate-preview`, only to the exact window label `main`, and only for local
 application content. There is no remote-origin capability, wildcard window, or
 `core:default` permission. The config selects that one capability explicitly.
 Generated schemas and permissions are build artifacts, not hand-maintained
@@ -257,8 +270,10 @@ loads bundled `index.html` from `frontendDist`; it does not navigate to remote
 application content. See [Tauri CSP](https://v2.tauri.app/security/csp/).
 
 No Tauri plugins, filesystem/shell/network commands, telemetry, analytics,
-authentication, updater, or secret-bearing logs are added. The only fixture is
-synthetic. Rust tests exercise the generated ACL with Tauri's mock runtime:
+authentication, updater, or secret-bearing logs are added. Tests use only
+synthetic fixtures. Preview input/results exist in memory and local IPC only;
+Clear does not promise secure erasure. Raw IPC limits application DTO parsing,
+not prior WebView/transport allocations or a compromised renderer. Rust tests exercise the generated ACL with Tauri's mock runtime:
 the real handler/Core result is allowed for local `main`, denied for another
 window, and denied for an external origin. That test is distinct from a native
 webview smoke test.
@@ -268,21 +283,31 @@ webview smoke test.
 Perform this in both a working Linux/WSLg session and a native Windows session
 when those environments are available:
 
-1. Run `pnpm -C apps/desktop tauri dev -- --locked`. Confirm a native window
-   titled **Cluebench** opens and renders the React screen.
-2. Confirm **Not checked yet.**, then click **Check Core connection**. Confirm
-   the result is **Core check completed.**, with accepted `true` and rejected
-   `false`. Loading may be too brief to observe on this tiny operation; focused
-   frontend tests hold the operation pending to verify that state.
-3. Click again and confirm the operation remains usable. Close the window and
-   confirm the process exits normally.
-4. Build with `pnpm -C apps/desktop tauri build --no-bundle --ci -- --locked`.
-   Stop Vite and launch `./target/release/cluebench-desktop` on Linux or
-   `.\target\release\cluebench-desktop.exe` on Windows from the repository root.
-   Repeat the check. This separately verifies packaged assets and production
-   CSP without the development server.
-5. Run `pnpm -C apps/desktop dev` alone and open its URL in a browser. Confirm
-   the action reports an unavailable Desktop connection and can be retried.
+1. Run `pnpm -C apps/desktop tauri dev -- --locked`. Confirm the native
+   **Cluebench** window renders Candidate Preview. Use the process-local proxy
+   workaround above only if the documented WSLg lookup failure occurs.
+2. Enter synthetic seeds `aB` and `12` on separate lines. Select Original,
+   ASCII Lowercase and ASCII Uppercase. Add ordered prefixes `""`, `PRE-` and
+   suffixes `""`, `-X`, using the explicit no-affix choices for empty strings.
+   Run Preview and confirm 24 records in Seed/Case/Prefix/Suffix order, including
+   `aB`, `aB-X`, `PRE-aB`, `PRE-aB-X` first. Inspect seed IDs, paths and affixes.
+3. Confirm attempted 24, skipped/rejected 0, emitted 24, relative points 0,
+   and Completed. Run again. Edit an input and confirm old results disappear.
+   Enter an internal empty seed line and confirm a fixed line-number error.
+   Restore input and verify retry. Set emission 1 to inspect OutputLimit;
+   use a 64-byte seed plus a nonempty prefix to inspect domain skips.
+4. Clear while a controlled request is pending when testing lifecycle behavior:
+   Clear invalidates display, but is not cancellation. The normal bounded run
+   may finish too quickly to observe Loading; focused frontend tests deliberately
+   hold Promises pending for these transitions.
+5. Build with `pnpm -C apps/desktop tauri build --no-bundle --ci -- --locked`.
+   Stop Vite, launch `./target/release/cluebench-desktop` on Linux or
+   `.\target\release\cluebench-desktop.exe` on Windows, and repeat the checks.
+   This verifies bundled assets, production CSP and real Raw IPC separately.
+6. Run `pnpm -C apps/desktop dev` alone in a browser and submit valid input.
+   Confirm Desktop unavailable, safe retry, and no fabricated candidates.
+7. Optionally run the auxiliary Core connection probe. Close the native window
+   normally and confirm clean process exit.
 
 Controlled frontend tests cover rejected invocations and recovery without adding
 a privileged debug command to the product. Do not report a browser render,
@@ -307,12 +332,11 @@ is not a measured runtime guarantee. CI runs after push and does not currently
 automate a native GUI smoke test. Local workflow editing does not establish a
 GitHub Actions PASS.
 
-This shell does not implement editors, a structure canvas, candidate preview or
-export, persistence/migration/encryption, full domain DTOs, generation jobs,
-streaming, revision management, backpressure, routing/global state/i18n
+The Desktop does not implement Clue/Hypothesis/Constraint editors, alternative
+selection, structure canvas, export, persistence/migration/encryption, general
+generation jobs, streaming, interactive cancellation, routing/global state/i18n
 frameworks, final branding, installers, signing, updates, release automation,
 macOS/mobile readiness, CLI/HTTP APIs, stable external Rust APIs, or runtime AI.
-Future preview work must adapt `ResolvedModel::generate()`'s synchronous
-callback, cancellation, and consumer stop to an application worker/job lifecycle
-with owned DTOs, bounded delivery, and revision-safe results. None of that is
-preemptively introduced by this read-only probe.
+Preview request/revision handling and bounded worker ownership are implemented
+locally without introducing those broader frameworks. Issue #11's glib
+vulnerability investigation remains separate and unresolved by this change.

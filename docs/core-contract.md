@@ -202,8 +202,9 @@ and returns at most 1,024 matched Soft IDs.
 These guarantees cover additional work inside validation, resolution, and
 evaluation. They do not bound allocations the caller already made while building
 `RawProject`, process-wide memory, allocator overhead, or allocator failure. A
-future loader or IPC boundary must enforce its own limits before constructing raw
-input. No loader or IPC implementation is included here.
+loader or IPC boundary must enforce its own limits before constructing raw
+input. The [Desktop Preview adapter](bounded-candidate-preview.md) supplies its
+own Raw IPC limits; no IPC implementation is included in the Core crate.
 
 ## Current exclusions
 
@@ -211,9 +212,9 @@ Structural analysis provides only the bounded deductions and verified witnesses
 documented in [bounded constraint analysis](bounded-constraint-analysis.md).
 Generation provides bounded, nonrecursive case and affix transformations with
 incremental Hard-eligible delivery; its completion does not imply exhaustive
-candidate-domain exploration. There is no complete constraint solver, candidate
-preview UI, wordlist export, serialization, migration, persistence, CLI, HTTP
-API, or general SAT/SMT framework. The crate does not test passwords against hashes
+candidate-domain exploration. There is no complete constraint solver, wordlist
+export, serialization, migration, persistence, CLI, HTTP API, or general SAT/SMT framework. The crate does not test passwords against hashes
 or services. Later MVP work can use this validated core without treating these
 missing capabilities as implemented. The separate [desktop shell](desktop-development.md)
-adds only a synthetic Core connection check through Tauri IPC.
+adds bounded manual-seed preview and a synthetic Core probe through Tauri IPC;
+these UI/IPC responsibilities remain outside the Core.

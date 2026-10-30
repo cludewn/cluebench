@@ -2,8 +2,8 @@
 
 `cluebench-core` implements the deterministic generation contract from
 [Issue #7](https://github.com/cludewn/cluebench/issues/7). This synchronous Core
-API is the foundation for later candidate preview and wordlist export. Neither
-consumer is implemented here. The API is internal application infrastructure;
+API powers the [Desktop candidate preview](bounded-candidate-preview.md);
+wordlist export remains unimplemented. Neither UI nor export belongs to the Core. The API is internal application infrastructure;
 external Rust API stability is not promised.
 
 The [core contract](core-contract.md) defines validation, resolution, the
@@ -273,10 +273,10 @@ runtime AI dependency, or remote authentication. Tests use synthetic data.
 
 ## Exclusions
 
-This feature adds no brute-force enumeration, recursive pipeline, custom
+The Core generation feature adds no brute-force enumeration, recursive pipeline, custom
 substitution, profile generation, statistical ranking, global deduplication,
 candidate preview UI, wordlist/file output, persistence or migration, search-space
 cardinality, complete SAT/SMT solver, GUI, async jobs, CLI, HTTP API, stable external
 Rust API, remote login automation, credential stuffing, spraying, or hash cracking.
-Bounded preview and plaintext export remain required later MVP work using this
-same Core generator.
+Desktop bounded preview now uses this same Core generator through a separate
+adapter; plaintext export remains future MVP work.

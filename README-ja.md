@@ -4,7 +4,9 @@ Cluebenchは、断片的・不確実なパスワードの手がかりを整理�
 
 CTF、本人のパスワード復旧、明示的に許可されたセキュリティ分析を主な用途とします。パスワードの検証・クラッキングエンジン自体を提供したり、オンライン認証への自動試行を行ったりすることは目的としません。
 
-> **現在の状況：** Rust Coreに、ドメイン検証・仮説の有効化・候補評価、限定的な制約解析と、由来を保持する上限付きseedベース生成を実装しています。最初のTauri 2 Desktop Shellは、React画面と合成データによる読み取り専用のCore接続確認を提供します。手がかり編集・候補プレビューUI・wordlist出力・永続化と残りのMVPワークフローは、まだ実装・リリースされていません。環境別の検証状況は[Desktop検証報告（英語）](docs/desktop-verification.md)を参照してください。
+> **現在の状況：** Rust Coreに、ドメイン検証・仮説の有効化・候補評価、限定的な制約解析と上限付き候補生成を実装しています。Desktopでは、明示的な大小文字変換・固定prefix/suffix、生成元と変換経路、Coreの統計を確認できる手動seed候補プレビューを提供します。合成データによるCore接続確認も補助機能として残しています。手がかり編集・wordlist出力・永続化と残りのMVPワークフローは、まだ実装・リリースされていません。仕様は[Previewの技術契約（英語）](docs/bounded-candidate-preview.md)を参照してください。
+
+[Previewの検証報告（英語）](docs/candidate-preview-verification.md)と[以前のShellの検証報告（英語）](docs/desktop-verification.md)は、作成時点のローカル検証証拠であり、現在のCI状況を示しません。CI実行結果の正式な記録は[GitHub Actions](https://github.com/cludewn/cluebench/actions)です。対象commitと各jobを直接確認してください。Native compilation、実GUI実行、IPC smoke検証は別々の確認です。変更ごとのローカルテスト・手動検証・未実施項目・制約は、該当PRへ記載します。
 
 ## Cluebenchの中心的な考え方
 
@@ -30,7 +32,7 @@ pnpm -C apps/desktop install --frozen-lockfile
 pnpm -C apps/desktop tauri dev
 ```
 
-Shellは合成データのみを使い、パスワード入力は受け付けません。`pnpm -C apps/desktop dev`はFrontend単独起動で、接続確認はDesktop未接続を表示します。現時点のUIは英語のみで、英日対応は今後の予定です。
+Previewは、1行につき1件のprintable ASCIIの手動seedを受け付け、前後のSpaceや重複行を保持します。既定の試行上限は2,048 Path、出力上限は50 recordで、最大値はそれぞれ4,096と100です。ローカルRaw IPCを通じ、単一のblocking workerで生成します。Clearは表示を無効化しますが、Rustの生成処理は取り消しません。入力・結果をログ出力・保存・外部送信しませんが、メモリの安全な消去は保証しません。`pnpm -C apps/desktop dev`はFrontendのみを起動し、ネイティブ操作はDesktop未接続を表示します。現在のUIは英語です。
 
 [Seed生成の技術契約（英語）](docs/bounded-seed-generation.md)では、大小文字変換・固定prefix/suffix、決定的な経路順序、独立した試行数・配送数上限、キャンセル、プライバシー保証を説明しています。生成処理は構造解析と独立しており、候補が見つからなくても充足不能の証明にはなりません。
 

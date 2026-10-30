@@ -45,4 +45,6 @@ Do not confuse structural satisfiability with candidates found by one generation
 
 ## Open technical decisions
 
-Tauri 2 is adopted for the initial [desktop shell](desktop-development.md), with a small Rust adapter to the UI-independent Core. This shell verifies a synthetic Core operation; it does not implement the MVP workflow. Exact persistence and encryption policy, platform packaging, product UI layout, further solver guarantees, memory limits, and release process remain open. See the [verification report](desktop-verification.md) for platform evidence.
+Tauri 2 is adopted for the initial [desktop shell](desktop-development.md), with a small Rust adapter to the UI-independent Core. The Desktop now provides the first [bounded manual-seed candidate preview](bounded-candidate-preview.md) and a synthetic Core probe; the rest of the MVP workflow remains incomplete. Exact persistence and encryption policy, platform packaging, product UI layout, further solver guarantees, memory limits, and release process remain open.
+
+The [Preview verification report](candidate-preview-verification.md) preserves historical local evidence from its creation, not current platform or CI status. [GitHub Actions](https://github.com/cludewn/cluebench/actions) is authoritative for CI run outcomes; inspect the target commit and each job. Change-specific local tests, manual checks, unexecuted checks, and limitations belong in the relevant PR. Current specifications and reusable verification procedures remain in the technical documents.
