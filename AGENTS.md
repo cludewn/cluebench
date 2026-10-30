@@ -16,7 +16,7 @@ Cluebench is an early-stage, local-first desktop workbench for reasoning about p
 - Product name: **Cluebench**.
 - Tagline: **A visual workbench for password clues and candidate exploration.**
 - License: **MPL-2.0**. Use appropriate source-file license headers for new code and respect dependency licenses.
-- Rust core, React + TypeScript frontend, and Tauri 2 desktop adapter. Keep the core UI-independent; see `docs/desktop-verification.md` for verified environments.
+- Rust core, React + TypeScript frontend, and Tauri 2 desktop adapter. Keep the core UI-independent; the [Issue #9 desktop verification report](docs/desktop-verification.md) preserves historical local environment evidence, not current CI status. Check [GitHub Actions](https://github.com/cludewn/cluebench/actions) for CI run outcomes.
 - The MVP must not depend on runtime AI/LLMs. This restriction is not a permanent product-wide ban on future AI features.
 - Manual candidate seeds, limited transformations, and bounded candidate preview **are MVP requirements**.
 - CLI, HTTP API, and stable external Rust API are **out of MVP scope**.
@@ -71,6 +71,17 @@ Cluebench is an early-stage, local-first desktop workbench for reasoning about p
 - Report `PASS` only for checks actually executed successfully. Distinguish static review findings from executed compilation, tests, linting, and other checks.
 - Disclose failed checks and unresolved issues. For important checks that could not be run, state what was not run, why, and what remains unverified.
 - Never include real passwords, credentials, or sensitive clue data in test data or reports.
+
+## Verification evidence management
+
+- Technical documents describe current specifications, design, implemented behavior, constraints, and reusable verification procedures. Update them when the implementation or those procedures change.
+- PR descriptions should record change-specific verification: local automated tests, manual checks, checks not run and why, and known limitations. Include the same evidence in the final report.
+- GitHub Actions is authoritative for CI run outcomes. Inspect the target commit and each job directly; do not infer success from workflow configuration or another commit's results.
+- Do not create a separate verification Markdown report for every issue by default. Record change-specific results in the final report and PR; keep reusable specifications and procedures in `docs/`. Create an exceptional long-lived verification record only with an explicit purpose explaining why it needs to be retained.
+- Historical reports are immutable records of what was actually verified at that time. Preserve their original PASS/FAIL results, unexecuted checks, and other recorded state; do not rewrite them after later verification.
+- Current specifications must not describe historical verification as current status. Label links to past reports as historical evidence and direct readers to GitHub Actions for CI outcomes.
+- Do not update repository documents solely to reflect a later CI success or create an additional commit just to copy CI results into Markdown.
+- Distinguish native compilation, actual GUI execution, and IPC smoke verification. Evidence for one does not establish the others.
 
 ## Final reports
 

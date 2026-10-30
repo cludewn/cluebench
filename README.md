@@ -4,7 +4,9 @@ Cluebench is an early-stage local-first desktop application for organizing incom
 
 Cluebench is intended for CTF challenges, recovery of passwords you own, and explicitly authorized security analysis. It is **not** a password cracking engine, and it will not automate login attempts against remote services.
 
-> **Project status:** The Rust core implements domain validation, hypothesis resolution, candidate evaluation, bounded constraint analysis, and bounded seed-based generation with provenance. The Tauri 2 desktop application provides a bounded manual-seed candidate preview with explicit case and fixed-affix options, provenance, and Core statistics. A synthetic Core connection check remains available. Clue editing, wordlist export, persistence, and the remaining MVP workflow are **not implemented or released yet**. Current platform evidence is recorded in the [Preview verification report](docs/candidate-preview-verification.md); the [earlier shell report](docs/desktop-verification.md) remains historical.
+> **Project status:** The Rust core implements domain validation, hypothesis resolution, candidate evaluation, bounded constraint analysis, and bounded seed-based generation with provenance. The Tauri 2 desktop application provides a bounded manual-seed candidate preview with explicit case and fixed-affix options, provenance, and Core statistics. A synthetic Core connection check remains available. Clue editing, wordlist export, persistence, and the remaining MVP workflow are **not implemented or released yet**.
+
+The [Preview verification report](docs/candidate-preview-verification.md) and [earlier shell report](docs/desktop-verification.md) preserve historical local evidence from their creation, not current CI status. [GitHub Actions](https://github.com/cludewn/cluebench/actions) is authoritative for CI run outcomes; check the target commit and each job. Native compilation, actual GUI execution, and IPC smoke verification are distinct checks. Change-specific local tests, manual checks, unexecuted checks, and limitations belong in the relevant PR.
 
 ## What makes Cluebench different?
 

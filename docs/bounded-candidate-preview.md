@@ -45,8 +45,9 @@ text, autofill/IME that exposes no usable raw data, or a programmatic assignment
 followed only by a normalized change event. OS/browser clipboard processing
 may itself normalize text before the application sees it. This is not a promise
 to observe every input's original bytes, or a defense against a compromised
-renderer. See the separate [normalization-fix verification record](input-normalization-verification.md)
-for React/jsdom and actual browser evidence and limits.
+renderer. The [normalization-fix verification record](input-normalization-verification.md)
+preserves historical local React/jsdom and browser evidence, including paths
+unverified at its creation; it does not describe current verification status.
 
 Case choices appear in the fixed order Original, ASCII Lowercase, ASCII
 Uppercase. Only selected choices are sent; Original is not implicit. Prefixes
@@ -192,9 +193,21 @@ plugins, shell/filesystem/HTTP grants, or development exceptions.
 
 ## Verification and remaining scope
 
-See the separate [Issue #12 verification record](candidate-preview-verification.md)
-for executed checks, test counts, native GUI/IPC evidence, and unverified
-Windows/CI work. The [Issue #9 record](desktop-verification.md) is historical.
+The [desktop development guide](desktop-development.md) provides reusable
+verification commands and manual procedures. Record change-specific local
+tests, manual checks, unexecuted checks, and limitations in the relevant PR.
+[GitHub Actions](https://github.com/cludewn/cluebench/actions) is authoritative
+for CI run outcomes; inspect the target commit and each job directly. Native
+compilation, actual GUI execution, and IPC smoke verification are distinct;
+a successful build alone does not establish GUI or IPC execution.
+
+The [Issue #12 verification record](candidate-preview-verification.md),
+[normalization-fix record](input-normalization-verification.md), and
+[Issue #9 record](desktop-verification.md) preserve historical local evidence.
+Their results, test counts, and unexecuted checks describe their creation time,
+not current CI status. Do not rewrite these records or update this specification
+solely to reflect a later CI success. New change-specific results belong in the
+PR by default, rather than a new verification report for every issue.
 
 Clue/Hypothesis/Constraint editors, alternative selection, persistence,
 structure canvas, exports, interactive cancellation, streaming/jobs, advanced

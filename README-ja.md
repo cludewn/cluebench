@@ -4,7 +4,9 @@ Cluebenchは、断片的・不確実なパスワードの手がかりを整理�
 
 CTF、本人のパスワード復旧、明示的に許可されたセキュリティ分析を主な用途とします。パスワードの検証・クラッキングエンジン自体を提供したり、オンライン認証への自動試行を行ったりすることは目的としません。
 
-> **現在の状況（Issue #12）：** Rust Coreに、ドメイン検証・仮説の有効化・候補評価、限定的な制約解析と上限付き候補生成を実装しています。Desktopでは、明示的な大小文字変換・固定prefix/suffix、生成元と変換経路、Coreの統計を確認できる手動seed候補プレビューを提供します。合成データによるCore接続確認も補助機能として残しています。手がかり編集・wordlist出力・永続化と残りのMVPワークフローは、まだ実装・リリースされていません。[Previewの技術契約（英語）](docs/bounded-candidate-preview.md)と[現在の検証記録（英語）](docs/candidate-preview-verification.md)を参照してください。[Issue #9の検証報告（英語）](docs/desktop-verification.md)は過去の実行記録として保持しています。
+> **現在の状況：** Rust Coreに、ドメイン検証・仮説の有効化・候補評価、限定的な制約解析と上限付き候補生成を実装しています。Desktopでは、明示的な大小文字変換・固定prefix/suffix、生成元と変換経路、Coreの統計を確認できる手動seed候補プレビューを提供します。合成データによるCore接続確認も補助機能として残しています。手がかり編集・wordlist出力・永続化と残りのMVPワークフローは、まだ実装・リリースされていません。仕様は[Previewの技術契約（英語）](docs/bounded-candidate-preview.md)を参照してください。
+
+[Previewの検証報告（英語）](docs/candidate-preview-verification.md)と[以前のShellの検証報告（英語）](docs/desktop-verification.md)は、作成時点のローカル検証証拠であり、現在のCI状況を示しません。CI実行結果の正式な記録は[GitHub Actions](https://github.com/cludewn/cluebench/actions)です。対象commitと各jobを直接確認してください。Native compilation、実GUI実行、IPC smoke検証は別々の確認です。変更ごとのローカルテスト・手動検証・未実施項目・制約は、該当PRへ記載します。
 
 ## Cluebenchの中心的な考え方
 
