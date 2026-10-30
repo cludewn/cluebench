@@ -1,5 +1,8 @@
 # Desktop shell verification
 
+Historical Issue #9 record. For the new manual-seed preview and its separate
+execution evidence, see [Issue #12 verification](candidate-preview-verification.md).
+
 Issue [#9](https://github.com/cludewn/cluebench/issues/9) implementation record,
 2026-10-29. The latest issue body and its 16 acceptance criteria were read before
 implementation. This report distinguishes executed checks from static review

@@ -220,6 +220,6 @@ conflict is not a satisfiability proof.
 
 Analysis itself adds no candidate generator or seed transformation. The separate
 [bounded seed generator](bounded-seed-generation.md) does not depend on analysis
-outcomes. There is no preview UI, wordlist export, cardinality calculation,
+outcomes. The analysis implementation provides no preview UI, wordlist export, cardinality calculation,
 minimum UNSAT core, repair engine, persistence, GUI, background job manager, CLI,
 HTTP API, Unicode domain, or SAT/SMT framework.

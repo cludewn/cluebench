@@ -4,7 +4,7 @@ Cluebench is an early-stage local-first desktop application for organizing incom
 
 Cluebench is intended for CTF challenges, recovery of passwords you own, and explicitly authorized security analysis. It is **not** a password cracking engine, and it will not automate login attempts against remote services.
 
-> **Project status:** The Rust core implements domain validation, hypothesis resolution, candidate evaluation, bounded constraint analysis, and bounded seed-based generation with provenance. The first Tauri 2 desktop shell provides a React interface and a read-only, synthetic Core connection check. Clue editing, candidate preview UI, wordlist export, persistence, and the remaining MVP workflow are **not implemented or released yet**. Platform verification is recorded in the [desktop verification report](docs/desktop-verification.md).
+> **Project status:** The Rust core implements domain validation, hypothesis resolution, candidate evaluation, bounded constraint analysis, and bounded seed-based generation with provenance. The Tauri 2 desktop application provides a bounded manual-seed candidate preview with explicit case and fixed-affix options, provenance, and Core statistics. A synthetic Core connection check remains available. Clue editing, wordlist export, persistence, and the remaining MVP workflow are **not implemented or released yet**. Current platform evidence is recorded in the [Preview verification report](docs/candidate-preview-verification.md); the [earlier shell report](docs/desktop-verification.md) remains historical.
 
 ## What makes Cluebench different?
 
@@ -36,13 +36,13 @@ pnpm -C apps/desktop install --frozen-lockfile
 pnpm -C apps/desktop tauri dev
 ```
 
-The desktop shell checks Core connectivity using synthetic data; it does not accept password data. `pnpm -C apps/desktop dev` starts only the frontend development server, where the connection check reports that the desktop is unavailable.
+Enter one printable ASCII manual seed per line, choose case and ordered prefix/suffix options, and explicitly run Preview. Defaults allow 2,048 attempted paths and 50 emitted records; maxima are 4,096 attempts and 100 records. Preview uses local Raw IPC and a single blocking worker; Clear invalidates results without cancelling Rust. See the [preview contract](docs/bounded-candidate-preview.md) for input grammar, resource limits, privacy boundaries, and stale-result handling. `pnpm -C apps/desktop dev` starts only the frontend server, where native operations report that Desktop is unavailable.
 
 The [seed-generation contract](docs/bounded-seed-generation.md) documents case and fixed-affix transformations, deterministic path ordering, independent attempt/output limits, cancellation, and privacy guarantees. Generation is independent of structural analysis; finding no eligible candidates does not prove unsatisfiability.
 
 ## Privacy and responsible use
 
-Clues, candidate seeds, and project files may contain sensitive information. Do not post real passwords, secrets, or confidential project material in issues, examples, logs, or pull requests. The planned application is local-first and does not include telemetry or automated online authentication attempts.
+Clues, candidate seeds, and project files may contain sensitive information. Do not post real passwords, secrets, or confidential project material in issues, examples, logs, or pull requests. The application uses local IPC and does not log, persist, or transmit preview content externally. It has no telemetry or automated online authentication attempts. Clearing inputs does not guarantee secure memory erasure.
 
 ## Language
 
