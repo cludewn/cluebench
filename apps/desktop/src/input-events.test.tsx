@@ -39,7 +39,7 @@ function transfer(target: Element, route: "paste" | "drop", raw: string) {
 }
 function successfulResponse(request: PreviewRequest): PreviewResponse {
   return {
-    requestId: request.requestId, effectiveLimits: request.limits, constraintBindings: [],
+    requestId: request.requestId, effectiveLimits: request.limits, constraintBindings: [], hypothesisBindings: [],
     candidates: [{ text: request.seeds[0], seedId: 1, path: { seedIndex: 0, caseIndex: 0,
       caseVariant: request.options.caseVariants[0], prefixIndex: 0, suffixIndex: 0 },
       prefix: request.options.prefixes[0], suffix: request.options.suffixes[0], relativePoints: 0, matchedSoftHypothesisIds: [] }],

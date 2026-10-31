@@ -22,7 +22,7 @@ export const CONSTRAINT_TYPES = [
 export const CHARACTER_CLASSES = ["lowercase", "uppercase", "digit", "space", "symbol"] as const;
 export type ConstraintType = (typeof CONSTRAINT_TYPES)[number]["value"];
 export type CharacterClass = (typeof CHARACTER_CLASSES)[number];
-type ConstraintValue<T> =
+export type ConstraintValue<T> =
   | { type: "length"; min: T; max: T }
   | { type: "position"; index: T; allowed: string }
   | { type: "contains" | "notContains" | "prefix" | "suffix"; literal: string }
@@ -36,7 +36,7 @@ interface ConditionMetadata {
 export interface DirectConstraintDraft extends ConditionMetadata { constraint: ConstraintValue<string> }
 export interface DirectConstraint extends ConditionMetadata { constraint: ConstraintValue<number> }
 
-function defaultConstraint(type: ConstraintType): ConstraintValue<string> {
+export function defaultConstraint(type: ConstraintType): ConstraintValue<string> {
   switch (type) {
     case "length": return { type, min: "1", max: "64" };
     case "position": return { type, index: "1", allowed: "" };
@@ -146,4 +146,15 @@ export function describeDirectConstraint(row: DirectConstraint): string {
     case "characterCount": return `CharacterCount ${value.class}: ${value.min}–${value.max}`;
     default: return `${CONSTRAINT_TYPES.find((type) => type.value === value.type)?.label}: “${value.literal}”`;
   }
+}
+
+/** Reuse the authoring contract for effects; matching remains exclusively in Core. */
+export function validateConstraint(constraint: DirectConstraintDraft["constraint"]): string[] {
+  return validateDirectConstraints([{ ...createDefaultDirectConstraint(1), constraint }]);
+}
+export function serializeConstraint(constraint: DirectConstraintDraft["constraint"]): DirectConstraint["constraint"] {
+  return serializeDirectConstraints([{ ...createDefaultDirectConstraint(1), constraint }])[0].constraint;
+}
+export function canonicalConstraint(constraint: DirectConstraint["constraint"]): DirectConstraint["constraint"] {
+  return canonicalDirectConstraints([{ ...createDefaultDirectConstraint(1), constraint }])[0].constraint;
 }

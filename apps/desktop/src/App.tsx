@@ -10,6 +10,6 @@ export default function App() {
     <header><p className="eyebrow">Manual seed exploration</p><h1>Cluebench</h1><p className="tagline">A visual workbench for password clues and candidate exploration.</p></header>
     <CandidatePreview />
     <CoreProbe />
-    <footer>Full Clue/Hypothesis editing, project persistence, structure canvas, and wordlist/clipboard export are not available yet.</footer>
+    <footer>Alternative Groups, project persistence, structure canvas, and wordlist/clipboard export are not available yet.</footer>
   </main>;
 }

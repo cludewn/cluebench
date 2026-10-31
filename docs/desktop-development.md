@@ -19,9 +19,12 @@ apps/desktop/
   src/App.tsx                 Candidate Preview and auxiliary Core probe
   src/CandidatePreview.tsx    Input/revision ownership and request snapshots
   src/direct-constraints.ts  Typed constraint drafts, validation, DTO conversion
-  src/DirectConstraintEditor.tsx  Controlled direct-condition rows
-  src/use-raw-text-guard.ts   Observable raw-text normalization protection
-  src/preview-input.ts        Seed/constraint input bounds, request construction
+  src/DirectConstraintEditor.tsx  Direct rows and shared constraint fields
+  src/clue-hypotheses.ts      Clue/Hypothesis/effect drafts and validation
+  src/ClueHypothesisEditor.tsx  Original evidence and interpretation editing
+  src/use-raw-text-guard.ts   Raw-text/IME guards and accepted-value restoration
+  src/unicode-text.ts         Unicode scalar and UTF-8 evidence validation
+  src/preview-input.ts        Shared input bounds and request construction
   src/preview-bridge.ts       Raw request encoding, response checks, safe errors
   src/core-bridge.ts          Auxiliary probe bridge and safe errors
   src-tauri/src/preview.rs    Bounded worker, DTOs, Core generation, single-flight
@@ -72,7 +75,7 @@ resolver 3 require Rust 1.85 or newer; the selected Tauri and tauri-build releas
 declare Rust 1.90. Cargo metadata reports 1.90 as the highest declared MSRV among
 the locked registry packages. The pin is a reproducible development baseline,
 not a promise to support every older compiler. Actual dependency compatibility
-is established by the locked builds recorded in the verification report.
+is established by the target commit's locked builds, not historical reports.
 
 An explicit `cargo +...`, `RUSTUP_TOOLCHAIN`, or rustup directory override can
 take precedence over the toolchain file. Check the active toolchain before
@@ -199,6 +202,22 @@ compiles/tests only the UI-independent Core, without building the Desktop
 adapter or requiring its frontend assets or GTK development libraries. Cargo
 still uses the shared workspace lockfile.
 
+For a reproducible synthetic release measurement of the bounded Rust adapter:
+
+```sh
+cargo test -p cluebench-desktop --release --locked \
+  release_native_32_effect_4096_attempt_measurement -- --ignored --nocapture
+```
+
+This ignored test uses 64 synthetic 50-byte Seeds, eight prefixes and eight
+suffixes of lengths 0–7, and 32 Hard Contains effects whose 32-byte literals
+force repeated comparisons. It exercises 4,096 attempted paths and reports
+elapsed adapter time, including actual request deserialization, Core project
+construction/validation/resolution/generation, and response serialization. It
+does not include WebView IPC. Record the input/effect/attempt counts, elapsed
+time, toolchain, OS/CPU, and whether real IPC was included in the implementation
+report. One local measurement is not a latency guarantee for other machines.
+
 Start the native development application with:
 
 ```sh
@@ -216,24 +235,55 @@ Core output.
 
 Candidate Preview is the primary screen. It accepts ordered manual seed lines,
 explicit case transformations and prefix/suffix lists, and independent attempt
-and emission limits. Up to 16 direct conditions can be added, edited, enabled,
-disabled, or removed. Supported types are Length, Position, Contains,
-NotContains, Prefix, Suffix, and CharacterCount. Each condition maps to one
-independent manual-origin Core hypothesis with one constraint effect. Hard
-conditions filter; matched Soft conditions contribute Low/Medium/High relative
-weights of 1/2/3, without changing generation order. Points are not probabilities.
-Disabled rows have no active evaluation effect but still require valid values
-before Preview and count toward the limit. No condition matching is performed
-in TypeScript.
+and emission limits. Up to 16 Direct Constraints preserve the independent
+manual-origin workflow. Up to 8 Clues store separate original text and source,
+and up to 8 Clue-backed Hypotheses reference them. Several Hypotheses can share
+one Clue. Each has an interpretation, enabled state, Hard/Soft applicability,
+confidence, and 0–4 effects, with at most 16 Clue-backed effects in total.
+The editor reuses the seven existing constraint fields: Length, Position,
+Contains, NotContains, Prefix, Suffix, and CharacterCount.
 
-The [Preview contract](bounded-candidate-preview.md)
-defines the exact input grammar, all resource limits, DTOs, one-shot Raw IPC,
-blocking worker and single-flight ownership, request/revision handling, safe
-errors, statistics/stop semantics, and privacy limitations. The request includes
-`directConstraints`; the response adds editor-to-hypothesis `constraintBindings`
-and each candidate's Core-provided `matchedSoftHypothesisIds`. Match explanations
-use the submitted snapshot, never later draft values. No interactive cancellation
-or export is provided.
+Every enabled Hard effect must match. An enabled Soft Hypothesis with effects
+contributes Low/Medium/High relative points of 1/2/3 once only when all its
+effects match. Zero effects neither filter nor score; removing the final effect
+retains its Hypothesis. Disabled records remain subject to full validation.
+Points are not probabilities and do not change generation order. TypeScript
+validates authoring and response consistency without matching candidate text.
+A Clue with any referring Hypothesis, including disabled, incomplete, or
+zero-effect drafts, cannot be deleted until those references are removed or
+explicitly reassigned. No automatic deletion or origin replacement occurs.
+
+Evidence text areas preserve accepted Unicode scalar text, LF, TAB, empty
+strings, surrounding whitespace, combining characters, and Emoji within byte
+limits, without trimming, normalization, or case conversion. The raw guard
+separates this contract from printable-ASCII constraint input. It rejects
+observable CR/CRLF insertions before textarea normalization, validates lone
+surrogates before UTF-8 encoding, and keeps the previous accepted field value
+on individual byte overflow. IME intermediate values block Preview until the
+completed value is validated. Noncancelable input may transiently change the
+DOM before restoration. Browser-normalized source bytes cannot be recovered;
+this is not byte-exact clipboard or file preservation.
+
+The [Preview contract](bounded-candidate-preview.md) defines exact input grammar,
+resource limits, DTOs, one-shot Raw IPC, single-flight worker ownership,
+request/revision handling, fixed errors, and privacy limitations. Requests retain
+`directConstraints` and add `clues` and `hypotheses`, including typed `effects`.
+Responses retain `constraintBindings` and add `hypothesisBindings` for every
+Clue-backed Hypothesis, including disabled and zero-effect ones. Shared
+`matchedSoftHypothesisIds` trace through validated bindings and the submitted
+request snapshot to interpretations and original Clue text/source. Later draft
+values never reinterpret a response.
+
+A single monotonically increasing nonzero `u32` editor allocator spans Direct
+Constraints, Clues, Hypotheses, and effects without reuse after deletion or Clear.
+Rust separately assigns request-local Core IDs in Seed, Direct Hypothesis/effect,
+Clue, then Clue-backed Hypothesis/effects order, with a maximum ID of 128. Both
+Raw and canonical typed requests are checked against 16,384 bytes; the whole
+input shares that budget in addition to individual caps. Canonical counting
+also covers shorter equivalent representations accepted by direct Serde parsing.
+Responses are limited to 65,536 bytes, attempts to 4,096, emissions to 100,
+and active workers to one with no waiting queue. These checks do not bound
+WebView/transport allocations before Rust receives the body.
 
 The auxiliary custom command, `core_probe`, takes no frontend input. It constructs a
 fixed synthetic `RawProject` containing one enabled, manual-origin Hard
@@ -263,10 +313,11 @@ The auxiliary probe displays both booleans with independent connection states.
 The primary Preview distinguishes Idle, Invalid, Loading, Success, Empty,
 Limited, and Error. Empty/Limited may coexist; Core termination is shown
 separately. Editing or Clear invalidates results while the outstanding request
-continues to hold Loading until its Promise settles. This includes every direct
-condition action and rejected observable raw input. Clear also resets the
-condition list, without reusing editor IDs. The full Clue/Hypothesis workspace,
-persistence, and export remain unavailable.
+continues to hold Loading until its Promise settles. This includes all Clue,
+Hypothesis, origin, effect, and Direct Constraint edits and rejected observable
+raw input. Clear empties those lists without reusing editor IDs or cancelling
+Rust. A complete Project Workspace, AlternativeGroups, persistence, and export
+remain unavailable.
 
 ## Command ACL, CSP, and privacy
 
@@ -294,8 +345,8 @@ application content. See [Tauri CSP](https://v2.tauri.app/security/csp/).
 
 No Tauri plugins, filesystem/shell/network commands, telemetry, analytics,
 authentication, updater, or secret-bearing logs are added. Tests use only
-synthetic fixtures. Preview seeds, constraints, and results exist in memory and
-local IPC only; Clear does not promise secure erasure. Raw IPC limits application
+synthetic fixtures. Clue text/source, interpretations, constraints, Seeds, and
+candidates exist in memory and local IPC only; Clear does not promise secure erasure. Raw IPC limits application
 DTO parsing, not prior WebView/transport allocations or a compromised renderer.
 Rust tests exercise the generated ACL with Tauri's mock runtime:
 the real handler/Core result is allowed for local `main`, denied for another
@@ -345,13 +396,32 @@ when those environments are available:
    Clear invalidates display, but is not cancellation. The normal bounded run
    may finish too quickly to observe Loading; focused frontend tests deliberately
    hold Promises pending for these transitions.
-8. Build with `pnpm -C apps/desktop tauri build --no-bundle --ci -- --locked`.
+8. Clear, use Original with no affixes and synthetic seeds `aB`, `AB`, and
+   `12`. Add a Clue with text `two clues\n合成 😀` and a separate source
+   ` example\t source `. Add a Hard Hypothesis with Contains `B` and Length
+   2–2 effects. Add a Medium Soft Hypothesis on the same Clue with Prefix `a`
+   and Suffix `B`. Preview emits `aB` and `AB`: `aB` adds exactly 2 points,
+   `AB` adds 0, and the Soft provenance displays the submitted interpretation,
+   original Clue text, and source. Add a direct Soft Length 2–2 condition with
+   Low confidence and rerun: points become 3 and 1, in the same order.
+9. Confirm a referenced Clue cannot be deleted. Disable its Hypotheses and
+   confirm deletion is still blocked. Remove all effects from one Hypothesis;
+   it remains visible, contributes no points or filtering, and still blocks
+   Clue deletion. Explicitly reassign all referring Hypotheses to a second
+   Clue or delete them, then remove the unreferenced Clue. Each operation must
+   invalidate results. Verify an invalid disabled effect blocks Preview and
+   an empty interpretation is accepted. Clear and successfully rerun seed-only
+   Preview. Exercise LF/TAB/Emoji and byte-limit rejection in evidence fields,
+   IME composition, observable CR/CRLF paste/drop/beforeinput rejection, and
+   noncancelable restoration where native facilities permit. Record actual
+   paths exercised without inferring them from jsdom tests.
+10. Build with `pnpm -C apps/desktop tauri build --no-bundle --ci -- --locked`.
    Stop Vite, launch `./target/release/cluebench-desktop` on Linux or
    `.\target\release\cluebench-desktop.exe` on Windows, and repeat the checks.
    This verifies bundled assets, production CSP and real Raw IPC separately.
-9. Run `pnpm -C apps/desktop dev` alone in a browser and submit valid input.
+11. Run `pnpm -C apps/desktop dev` alone in a browser and submit valid input.
    Confirm Desktop unavailable, safe retry, and no fabricated candidates.
-10. Optionally run the auxiliary Core connection probe. Close the native window
+12. Optionally run the auxiliary Core connection probe. Close the native window
    normally and confirm clean process exit.
 
 Controlled frontend tests cover rejected invocations and recovery without adding
@@ -378,8 +448,9 @@ is not a measured runtime guarantee. CI runs after push and does not currently
 automate a native GUI smoke test. Local workflow editing does not establish a
 GitHub Actions PASS.
 
-The Desktop does not implement the full Clue/Hypothesis workspace, alternative
-selection, structure canvas, export, persistence/migration/encryption, general
+The Desktop does not implement a complete Project Workspace, AlternativeGroup
+editing or exclusive selection, Hypothesis-owned Seed effects, structural
+analysis UI, structure canvas, export, persistence/migration/encryption, general
 generation jobs, streaming, interactive cancellation, routing/global state/i18n
 frameworks, final branding, installers, signing, updates, release automation,
 macOS/mobile readiness, CLI/HTTP APIs, stable external Rust APIs, or runtime AI.

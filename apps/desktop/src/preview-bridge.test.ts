@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { PREVIEW_COMMAND, PreviewError, encodePreviewRequest, isPreviewResponse, runCandidatePreview, safePreviewError } from "./preview-bridge";
+import { createDefaultHypothesis } from "./clue-hypotheses";
 import { createDefaultDirectConstraint } from "./direct-constraints";
 import type { DirectConstraint } from "./direct-constraints";
 import type { PreviewResponse } from "./preview-bridge";
@@ -12,8 +13,8 @@ import { createPreviewRequest } from "./preview-input";
 import type { PreviewInput, PreviewRequest } from "./preview-input";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: vi.fn() }));
 beforeEach(() => { vi.mocked(isTauri).mockReturnValue(true); });
-export const request = (): PreviewRequest => ({ directConstraints: [], requestId: "p1", seeds: ["A"], options: { caseVariants: ["original"], prefixes: [""], suffixes: [""] }, limits: { attemptLimit: 2048, emissionLimit: 50 } });
-export const response = (): PreviewResponse => ({ constraintBindings: [], requestId: "p1", effectiveLimits: { attemptLimit: 2048, emissionLimit: 50 }, candidates: [{ text: "A", seedId: 1, path: { seedIndex: 0, caseIndex: 0, caseVariant: "original", prefixIndex: 0, suffixIndex: 0 }, prefix: "", suffix: "", relativePoints: 0, matchedSoftHypothesisIds: [] }], stats: { attemptedPaths: 1, domainSkips: 0, hardRejections: 0, emittedCandidates: 1 }, potentialPaths: 1, stop: "completed" });
+export const request = (): PreviewRequest => ({ clues: [], hypotheses: [], directConstraints: [], requestId: "p1", seeds: ["A"], options: { caseVariants: ["original"], prefixes: [""], suffixes: [""] }, limits: { attemptLimit: 2048, emissionLimit: 50 } });
+export const response = (): PreviewResponse => ({ hypothesisBindings: [], constraintBindings: [], requestId: "p1", effectiveLimits: { attemptLimit: 2048, emissionLimit: 50 }, candidates: [{ text: "A", seedId: 1, path: { seedIndex: 0, caseIndex: 0, caseVariant: "original", prefixIndex: 0, suffixIndex: 0 }, prefix: "", suffix: "", relativePoints: 0, matchedSoftHypothesisIds: [] }], stats: { attemptedPaths: 1, domainSkips: 0, hardRejections: 0, emittedCandidates: 1 }, potentialPaths: 1, stop: "completed" });
 
 describe("Preview raw IPC bridge", () => {
   it("sends explicitly encoded UTF-8 Uint8Array, returning a validated real-shaped DTO", async () => {
@@ -115,7 +116,7 @@ describe("Direct condition request and response provenance", () => {
     ];
     for (const directConstraints of invalid) expect(() => encodePreviewRequest({ ...request(), directConstraints })).toThrowError(new PreviewError("PREVIEW_INVALID_REQUEST"));
   });
-  it("independently measures an escaped canonical request at all simultaneous maxima", () => {
+  it("independently measures an escaped canonical request at the existing manual-workflow maxima", () => {
     const req = request(); req.requestId = "r".repeat(32);
     req.seeds = Array(64).fill('"'.repeat(64));
     const affixes = Array.from({ length: 8 }, (_, i) => '"'.repeat(61) + [i & 1 ? "\\" : '"', i & 2 ? "\\" : '"', i & 4 ? "\\" : '"'].join(""));
@@ -123,7 +124,7 @@ describe("Direct condition request and response provenance", () => {
     req.limits = { attemptLimit: 4096, emissionLimit: 100 };
     req.directConstraints = Array.from({ length: 16 }, (_, i) => condition(0xffff_ffff - i, { enabled: false, applicability: "hard", confidence: "medium", constraint: { type: "position", index: 64, allowed: '"'.repeat(95) } }));
     const payload = encodePreviewRequest(req);
-    expect(payload.byteLength).toBe(16023);
+    expect(payload.byteLength).toBe(16050);
     expect(payload.byteLength).toBeLessThanOrEqual(16384);
     expect(JSON.parse(new TextDecoder().decode(payload)).directConstraints).toEqual(req.directConstraints);
   });
@@ -214,7 +215,7 @@ describe("Direct condition request and response provenance", () => {
   });
   it.each([1, 3])("validates %i returned points against the submitted snapshot after draft confidence changes", async (relativePoints) => {
     const draft = createDefaultDirectConstraint(7); draft.applicability = "soft"; draft.confidence = "low";
-    const input: PreviewInput = { seedText: "A", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", directConstraints: [draft] };
+    const input: PreviewInput = { clues: [], hypotheses: [], seedText: "A", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", directConstraints: [draft] };
     const submitted = createPreviewRequest(input, "p1");
     const res = response(); res.constraintBindings = [{ editorId: 7, hypothesisId: 2 }];
     res.candidates[0].matchedSoftHypothesisIds = [2]; res.candidates[0].relativePoints = relativePoints;
@@ -263,5 +264,124 @@ describe("Direct condition request and response provenance", () => {
     expect(isPreviewResponse(res, req)).toBe(true);
     res.candidates.reverse(); expect(isPreviewResponse(res, req)).toBe(false);
     res.candidates[1] = res.candidates[0]; expect(isPreviewResponse(res, req)).toBe(false);
+  });
+});
+
+function clueBacked() {
+  const { req, res } = constrained();
+  req.clues = [{ editorId: 100, text: "  e\u0301😀\n\t ", source: "synthetic\nsource" }];
+  req.hypotheses = [
+    { ...createDefaultHypothesis(101, 100), interpretation: "submitted", applicability: "soft", confidence: "medium", effects: [
+      { editorId: 102, constraint: { type: "contains", literal: "A" } },
+      { editorId: 103, constraint: { type: "suffix", literal: "A" } },
+    ] },
+    { ...createDefaultHypothesis(104, 100), enabled: false, effects: [] },
+    { ...createDefaultHypothesis(105, 100), applicability: "soft", effects: [] },
+  ];
+  res.hypothesisBindings = [{ editorId: 101, hypothesisId: 9 }, { editorId: 104, hypothesisId: 12 }, { editorId: 105, hypothesisId: 13 }];
+  res.candidates[0].matchedSoftHypothesisIds = [2, 9]; res.candidates[0].relativePoints = 5;
+  return { req, res };
+}
+
+describe("Clue-backed request snapshots and response provenance", () => {
+  it("encodes canonical nested evidence and multiple effects, retaining Unicode without response duplication", () => {
+    const { req, res } = clueBacked();
+    const dto = JSON.parse(new TextDecoder().decode(encodePreviewRequest(req)));
+    expect(dto).toEqual(req);
+    expect(isPreviewResponse(res, req)).toBe(true);
+    res.hypothesisBindings.reverse();
+    expect(isPreviewResponse(res, req)).toBe(true);
+    expect(JSON.stringify(res)).not.toContain("submitted");
+  });
+  it.each([
+    (res: PreviewResponse) => { res.hypothesisBindings.pop(); },
+    (res: PreviewResponse) => { res.hypothesisBindings[1] = res.hypothesisBindings[0]; },
+    (res: PreviewResponse) => { res.hypothesisBindings[0].hypothesisId = 8; },
+    (res: PreviewResponse) => { res.hypothesisBindings[0].hypothesisId = 2; },
+    (res: PreviewResponse) => { res.hypothesisBindings[0].editorId = 102; },
+    (res: PreviewResponse) => { res.candidates[0].matchedSoftHypothesisIds = [9, 9]; },
+    (res: PreviewResponse) => { res.candidates[0].matchedSoftHypothesisIds = [12]; res.candidates[0].relativePoints = 2; },
+    (res: PreviewResponse) => { res.candidates[0].matchedSoftHypothesisIds = [13]; res.candidates[0].relativePoints = 2; },
+    (res: PreviewResponse) => { res.candidates[0].matchedSoftHypothesisIds = [10]; res.candidates[0].relativePoints = 2; },
+    (res: PreviewResponse) => { res.candidates[0].relativePoints = 7; },
+    (res: PreviewResponse) => { res.candidates[0].relativePoints = 73; },
+  ])("rejects incomplete, duplicate, wrong-owner and impossible score provenance #%#", (mutate) => {
+    const { req, res } = clueBacked(); mutate(res);
+    expect(isPreviewResponse(res, req)).toBe(false);
+  });
+  it("considers clue-backed Hard effects for rejection counters but excludes zero-effect Hard", () => {
+    const { req, res } = clueBacked();
+    req.directConstraints.forEach((row) => { row.enabled = false; });
+    req.hypotheses[0].applicability = "hard";
+    res.candidates = []; res.stats.emittedCandidates = 0; res.stats.hardRejections = 1;
+    expect(isPreviewResponse(res, req)).toBe(true);
+    req.hypotheses[0].effects = [];
+    res.hypothesisBindings = [{ editorId: 101, hypothesisId: 9 }, { editorId: 104, hypothesisId: 10 }, { editorId: 105, hypothesisId: 11 }];
+    expect(isPreviewResponse(res, req)).toBe(false);
+  });
+  it("counts a multi-effect Medium match once without evaluating candidate constraints", () => {
+    const { req, res } = clueBacked();
+    req.hypotheses[0].effects[0].constraint = { type: "contains", literal: "Z" };
+    expect(isPreviewResponse(res, req)).toBe(true);
+    res.candidates[0].relativePoints = 7;
+    expect(isPreviewResponse(res, req)).toBe(false);
+  });
+  it("accepts 24 High hypotheses and 72 points with exact allocation through Core ID 128", () => {
+    const req = request(); req.seeds = Array(64).fill("A");
+    req.directConstraints = Array.from({ length: 16 }, (_, i) => condition(i + 1));
+    req.clues = Array.from({ length: 8 }, (_, i) => ({ editorId: 17 + i, text: "", source: "" }));
+    req.hypotheses = Array.from({ length: 8 }, (_, i) => ({ ...createDefaultHypothesis(25 + i, 17 + i), applicability: "soft", confidence: "high",
+      effects: [{ editorId: 33 + i * 2, constraint: { type: "length", min: 1, max: 64 } }, { editorId: 34 + i * 2, constraint: { type: "length", min: 1, max: 64 } }],
+    }));
+    const res = response();
+    res.potentialPaths = 64; res.stats.attemptedPaths = 64; res.stats.emittedCandidates = 64;
+    res.effectiveLimits.emissionLimit = req.limits.emissionLimit = 100;
+    res.constraintBindings = req.directConstraints.map((row, i) => ({ editorId: row.editorId, hypothesisId: 65 + i * 2 }));
+    res.hypothesisBindings = req.hypotheses.map((row, i) => ({ editorId: row.editorId, hypothesisId: 105 + i * 3 }));
+    res.candidates = Array.from({ length: 64 }, (_, i) => ({ ...response().candidates[0], seedId: i + 1, path: { ...response().candidates[0].path, seedIndex: i },
+      matchedSoftHypothesisIds: [...res.constraintBindings, ...res.hypothesisBindings].map((binding) => binding.hypothesisId), relativePoints: 72,
+    }));
+    expect(isPreviewResponse(res, req)).toBe(true);
+    res.candidates[0].matchedSoftHypothesisIds.push(128);
+    expect(isPreviewResponse(res, req)).toBe(false);
+  });
+  it("rejects invalid references, global editor collisions and malformed Unicode before invocation", async () => {
+    for (const mutate of [
+      (req: PreviewRequest) => { req.hypotheses[0].clueEditorId = 102; },
+      (req: PreviewRequest) => { req.hypotheses[0].effects[0].editorId = 7; },
+      (req: PreviewRequest) => { req.clues[0].text = "x\r\ny"; },
+      (req: PreviewRequest) => { req.hypotheses[0].interpretation = "\ud800"; },
+      (req: PreviewRequest) => { req.hypotheses[1].effects.push({ editorId: 106, constraint: { type: "contains", literal: "" } }); },
+    ]) {
+      const { req } = clueBacked(); mutate(req);
+      await expect(runCandidatePreview(req)).rejects.toMatchObject({ code: "PREVIEW_INVALID_REQUEST" });
+    }
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+function exactBudgetRequest(bytes: number): PreviewRequest {
+  const req = request(); req.limits = { attemptLimit: 4096, emissionLimit: 100 };
+  req.seeds = Array(64).fill("A".repeat(64));
+  req.directConstraints = Array.from({ length: 16 }, (_, i) => condition(i + 1, { constraint: { type: "position", index: 1, allowed: '"'.repeat(95) } }));
+  req.clues = [{ editorId: 17, text: "", source: "" }];
+  req.hypotheses = Array.from({ length: 4 }, (_, i) => ({ ...createDefaultHypothesis(18 + i, 17), applicability: "soft", confidence: "high",
+    effects: Array.from({ length: 4 }, (_, j) => ({ editorId: 30 + i * 4 + j, constraint: { type: "position", index: 1, allowed: '"'.repeat(95) } })),
+  }));
+  const extraEscapes = bytes - new TextEncoder().encode(JSON.stringify(req)).byteLength;
+  expect(extraEscapes).toBeGreaterThan(0); expect(extraEscapes).toBeLessThan(4096);
+  req.seeds = req.seeds.map((seed, i) => '"'.repeat(Math.max(0, Math.min(64, extraEscapes - i * 64))) + seed.slice(Math.max(0, Math.min(64, extraEscapes - i * 64))));
+  expect(new TextEncoder().encode(JSON.stringify(req)).byteLength).toBe(bytes);
+  return req;
+}
+
+describe("Shared canonical request budget", () => {
+  it("measures actual JSON escaping at exactly 16,384 and rejects 16,385 bytes without trimming", () => {
+    const exact = exactBudgetRequest(16384);
+    expect(encodePreviewRequest(exact).byteLength).toBe(16384);
+    const oversized = exactBudgetRequest(16385);
+    const before = JSON.stringify(oversized);
+    expect(() => encodePreviewRequest(oversized)).toThrowError(new PreviewError("PREVIEW_REQUEST_TOO_LARGE"));
+    expect(JSON.stringify(oversized)).toBe(before);
   });
 });

@@ -144,3 +144,9 @@ th { white-space: nowrap; }
 summary { cursor: pointer; font-weight: 600; }
 .connection p:first-of-type { margin-top: 12px; }
 @media (max-width: 650px) { main { padding: 24px 12px; } .preview { padding: 16px; } .option-grid, .constraint-settings, .constraint-fields { grid-template-columns: 1fr; gap: 0; } }
+.clue-row { border-left: 3px solid #4f7662; }
+.hypothesis-row { border-left: 3px solid #677dab; }
+.effect-row { background: #f8fafc; }
+.provenance { display: block; margin: 8px 0; min-width: 180px; }
+.provenance dt { font-size: 0.85rem; font-weight: 600; }
+.provenance dd { margin-bottom: 8px; }

@@ -20,7 +20,13 @@ const seedBox = () => screen.getByRole("textbox", { name: "Manual seeds — one 
 const enter = (text = "Synthetic1!") => fireEvent.change(seedBox(), { target: { value: text } });
 const status = () => screen.getByRole("status", { name: "Preview status" });
 function result(req: PreviewRequest): PreviewResponse {
-  return { requestId: req.requestId, effectiveLimits: req.limits, constraintBindings: req.directConstraints.map((row, index) => ({ editorId: row.editorId, hypothesisId: req.seeds.length + 2 * index + 1 })),
+  let nextId = req.seeds.length + req.directConstraints.length * 2 + req.clues.length + 1;
+  const hypothesisBindings = req.hypotheses.map((hypothesis) => {
+    const binding = { editorId: hypothesis.editorId, hypothesisId: nextId };
+    nextId += 1 + hypothesis.effects.length;
+    return binding;
+  });
+  return { requestId: req.requestId, effectiveLimits: req.limits, hypothesisBindings, constraintBindings: req.directConstraints.map((row, index) => ({ editorId: row.editorId, hypothesisId: req.seeds.length + 2 * index + 1 })),
     candidates: [{ text: req.seeds[0], seedId: 1, path: { seedIndex: 0, caseIndex: 0, caseVariant: req.options.caseVariants[0], prefixIndex: 0, suffixIndex: 0 }, prefix: req.options.prefixes[0], suffix: req.options.suffixes[0], relativePoints: 0, matchedSoftHypothesisIds: [] }],
     stats: { attemptedPaths: 1, domainSkips: 0, hardRejections: 0, emittedCandidates: 1 }, potentialPaths: 1, stop: "completed" };
 }
