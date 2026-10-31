@@ -4,8 +4,10 @@
 
 import { describe, expect, it } from "vitest";
 import { createPreviewRequest, parseSeedLines, utf8Bytes, validatePreviewInput } from "./preview-input";
+import { createDefaultDirectConstraint } from "./direct-constraints";
+import { createDefaultEffect, createDefaultHypothesis } from "./clue-hypotheses";
 import type { PreviewInput } from "./preview-input";
-const input = (patch: Partial<PreviewInput> = {}): PreviewInput => ({ directConstraints: [], seedText: "A", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", ...patch });
+const input = (patch: Partial<PreviewInput> = {}): PreviewInput => ({ clues: [], hypotheses: [], directConstraints: [], seedText: "A", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", ...patch });
 
 describe("Manual preview input", () => {
   it.each([
@@ -43,7 +45,24 @@ describe("Manual preview input", () => {
   });
   it("builds an explicit DTO in fixed selected-case order without Original injection", () => {
     expect(createPreviewRequest(input({ seedText: " A \nA\nA\n", caseVariants: ["asciiUppercase", "asciiLowercase"], prefixes: ["X", ""], suffixes: [" "] }), "p1")).toEqual({
-      directConstraints: [], requestId: "p1", seeds: [" A ", "A", "A"], options: { caseVariants: ["asciiLowercase", "asciiUppercase"], prefixes: ["X", ""], suffixes: [" "] }, limits: { attemptLimit: 2048, emissionLimit: 50 },
+      clues: [], hypotheses: [], directConstraints: [], requestId: "p1", seeds: [" A ", "A", "A"], options: { caseVariants: ["asciiLowercase", "asciiUppercase"], prefixes: ["X", ""], suffixes: [" "] }, limits: { attemptLimit: 2048, emissionLimit: 50 },
     });
+  });
+});
+
+
+describe("Shared request draft budget", () => {
+  it("retains valid individual drafts when escaped canonical JSON exceeds 16 KiB", () => {
+    const affixes = Array.from({ length: 8 }, (_, i) => '"'.repeat(61) + [i & 1 ? "\\" : '"', i & 2 ? "\\" : '"', i & 4 ? "\\" : '"'].join(""));
+    const draft = input({ seedText: Array(64).fill('"'.repeat(64)).join("\n"),
+      caseVariants: ["original", "asciiLowercase", "asciiUppercase"], prefixes: affixes, suffixes: affixes,
+      directConstraints: Array.from({ length: 16 }, (_, i) => ({ ...createDefaultDirectConstraint(i + 1), constraint: { type: "position", index: "64", allowed: '"'.repeat(95) } })),
+      clues: [{ editorId: 17, text: "e\u0301😀\n\t", source: "synthetic" }],
+      hypotheses: [{ ...createDefaultHypothesis(18, 17), effects: Array.from({ length: 4 }, (_, i) => ({ ...createDefaultEffect(19 + i), constraint: { type: "position", index: "64", allowed: '"'.repeat(95) } })) }],
+    });
+    const before = JSON.stringify(draft);
+    expect(validatePreviewInput(draft, "preview-100")).toEqual(["The preview request exceeds 16 KiB. Reduce the input."]);
+    expect(utf8Bytes(JSON.stringify(createPreviewRequest(draft, "preview-100")))).toBeGreaterThan(16384);
+    expect(JSON.stringify(draft)).toBe(before);
   });
 });

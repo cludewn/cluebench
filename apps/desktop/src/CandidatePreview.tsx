@@ -2,40 +2,49 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { CASE_OPTIONS, PREVIEW_LIMITS, createPreviewRequest, validatePreviewInput } from "./preview-input";
 import type { CaseVariant, PreviewInput } from "./preview-input";
 import { PreviewError, runCandidatePreview, safePreviewError } from "./preview-bridge";
 import type { PreviewResponse } from "./preview-bridge";
 import { useRawTextGuard } from "./use-raw-text-guard";
 import DirectConstraintEditor from "./DirectConstraintEditor";
+import ClueHypothesisEditor from "./ClueHypothesisEditor";
+import { createDefaultEffect, createDefaultHypothesis } from "./clue-hypotheses";
 import { createDefaultDirectConstraint, describeDirectConstraint } from "./direct-constraints";
 
-const defaults = (): PreviewInput => ({ seedText: "", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", directConstraints: [] });
-let requestSequence = 0;
+const defaults = (): PreviewInput => ({ seedText: "", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", directConstraints: [], clues: [], hypotheses: [] });
 const stopLabels = { completed: "Completed", attemptLimit: "AttemptLimit", outputLimit: "OutputLimit", cancelled: "Cancelled", consumerStopped: "ConsumerStopped" } as const;
 const caseLabel = (value: CaseVariant) => CASE_OPTIONS.find((option) => option.value === value)?.label;
 
-function AffixInput({ value, onChange, onRejected }: { value: string; onChange: (value: string) => void; onRejected: (message: string) => void }) {
-  const guard = useRawTextGuard<HTMLInputElement>("affix", value, onChange, onRejected);
-  return <input {...guard} value={value} spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" />;
+function SeedInput({ value, onChange, onRejected, onCompositionChange }: { value: string; onChange: (value: string) => void; onRejected: (message: string) => void; onCompositionChange: (field: string, active: boolean) => void }) {
+  const fieldId = useId();
+  const guard = useRawTextGuard<HTMLTextAreaElement>("seeds", value, onChange, onRejected, { onCompositionChange: (active) => onCompositionChange(`seeds-${fieldId}`, active) });
+  return <textarea {...guard} id="seeds" rows={5} spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" aria-describedby="seed-help" />;
 }
 
-function AffixOptions({ name, onChange, onRejected }: { name: "Prefix" | "Suffix"; onChange: (values: string[], hasBlankRows: boolean) => void; onRejected: (message: string) => void }) {
+function AffixInput({ value, onChange, onRejected, onCompositionChange }: { value: string; onChange: (value: string) => void; onRejected: (message: string) => void; onCompositionChange: (field: string, active: boolean) => void }) {
+  const fieldId = useId();
+  const guard = useRawTextGuard<HTMLInputElement>("affix", value, onChange, onRejected, { onCompositionChange: (active) => onCompositionChange(`affix-${fieldId}`, active) });
+  return <input {...guard} spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" />;
+}
+
+function AffixOptions({ name, onChange, onRejected, onCompositionChange }: { name: "Prefix" | "Suffix"; onChange: (values: string[], hasBlankRows: boolean) => void; onRejected: (message: string) => void; onCompositionChange: (field: string, active: boolean) => void }) {
   const [noAffix, setNoAffix] = useState(true);
-  const [rows, setRows] = useState<string[]>([]);
-  function change(nextRows: string[], nextNoAffix = noAffix) {
+  const [rows, setRows] = useState<{ id: number; value: string }[]>([]);
+  const rowSequence = useRef(0);
+  function change(nextRows: typeof rows, nextNoAffix = noAffix) {
     setRows(nextRows); setNoAffix(nextNoAffix);
-    onChange([...(nextNoAffix ? [""] : []), ...nextRows.filter((value) => value !== "")], nextRows.some((value) => value === ""));
+    onChange([...(nextNoAffix ? [""] : []), ...nextRows.map((row) => row.value).filter((value) => value !== "")], nextRows.some((row) => row.value === ""));
   }
   return <fieldset>
     <legend>{name} options</legend>
     <label className="check"><input type="checkbox" checked={noAffix} onChange={(event) => change(rows, event.target.checked)} />No {name.toLowerCase()}</label>
-    {rows.map((value, index) => <div className="affix-row" key={index}>
-      <label>{name} {index + 1}<AffixInput value={value} onRejected={onRejected} onChange={(text) => change(rows.map((item, row) => row === index ? text : item))} /></label>
-      <button type="button" className="secondary" aria-label={`Remove ${name.toLowerCase()} ${index + 1}`} onClick={() => change(rows.filter((_, row) => row !== index))}>Remove</button>
+    {rows.map((row, index) => <div className="affix-row" key={row.id}>
+      <label>{name} {index + 1}<AffixInput value={row.value} onRejected={onRejected} onCompositionChange={onCompositionChange} onChange={(value) => change(rows.map((current) => current.id === row.id ? { ...current, value } : current))} /></label>
+      <button type="button" className="secondary" aria-label={`Remove ${name.toLowerCase()} ${index + 1}`} onClick={() => change(rows.filter((current) => current.id !== row.id))}>Remove</button>
     </div>)}
-    <button type="button" className="secondary" disabled={rows.length + Number(noAffix) >= 8} onClick={() => change([...rows, ""])}>Add {name.toLowerCase()}</button>
+    <button type="button" className="secondary" disabled={rows.length + Number(noAffix) >= 8} onClick={() => change([...rows, { id: ++rowSequence.current, value: "" }])}>Add {name.toLowerCase()}</button>
     <p className="hint">Up to 8 ordered options, 0–64 printable ASCII bytes each. Spaces are preserved. The explicit no-affix option comes first. New rows require text; remove unused rows.</p>
   </fieldset>;
 }
@@ -65,13 +74,23 @@ function PreviewResult({ result, request }: { result: PreviewResponse; request: 
         <td>{caseLabel(candidate.path.caseVariant)}<br />Prefix: <code className="secret-text">{candidate.prefix === "" ? "(none)" : candidate.prefix}</code><br />Suffix: <code className="secret-text">{candidate.suffix === "" ? "(none)" : candidate.suffix}</code></td>
         <td>{candidate.relativePoints}</td>
         <td>{candidate.matchedSoftHypothesisIds.length === 0 ? "None" : <ul>{candidate.matchedSoftHypothesisIds.map((id) => {
-          const binding = result.constraintBindings.find((item) => item.hypothesisId === id)!;
-          const condition = request.directConstraints.find((item) => item.editorId === binding.editorId)!;
-          return <li key={id}>Condition {request.directConstraints.indexOf(condition) + 1}: <span className="secret-text">{describeDirectConstraint(condition)}</span> ({condition.confidence})</li>;
+          const binding = result.constraintBindings.find((item) => item.hypothesisId === id);
+          if (binding) {
+            const condition = request.directConstraints.find((item) => item.editorId === binding.editorId)!;
+            return <li key={id}>Condition {request.directConstraints.indexOf(condition) + 1}: <span className="secret-text">{describeDirectConstraint(condition)}</span> ({condition.confidence})</li>;
+          }
+          const hypothesisBinding = result.hypothesisBindings.find((item) => item.hypothesisId === id)!;
+          const hypothesis = request.hypotheses.find((item) => item.editorId === hypothesisBinding.editorId)!;
+          const clue = request.clues.find((item) => item.editorId === hypothesis.clueEditorId)!;
+          return <li key={id}>Hypothesis {request.hypotheses.indexOf(hypothesis) + 1} ({hypothesis.confidence}):
+            <dl className="provenance"><dt>Interpretation</dt><dd className="secret-text">{hypothesis.interpretation}</dd>
+              <dt>Original Clue {request.clues.indexOf(clue) + 1}</dt><dd className="secret-text">{clue.text}</dd>
+              <dt>Source</dt><dd className="secret-text">{clue.source}</dd></dl>
+          </li>;
         })}</ul>}</td>
       </tr>)}</tbody>
     </table></div>}
-    <p className="hint">Seed and Core hypothesis IDs belong only to this request. Path indices are zero-based. Equal candidate text from different paths stays separate. Soft confidence contributes Low 1, Medium 2, or High 3 relative points per matched condition; points are not success probabilities and do not change generation order. Hard rejections are aggregate counts; individual reasons are unavailable.</p>
+    <p className="hint">Seed and Core hypothesis IDs belong only to this request. Path indices are zero-based. Equal candidate text from different paths stays separate. Soft confidence contributes Low 1, Medium 2, or High 3 relative points once per matched hypothesis when all its effects match; points are not success probabilities and do not change generation order. Hard rejections are aggregate counts; individual reasons are unavailable.</p>
   </section>;
 }
 
@@ -84,12 +103,15 @@ export default function CandidatePreview() {
   const [result, setResult] = useState<{ response: PreviewResponse; request: ReturnType<typeof createPreviewRequest> } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inputRejection, setInputRejection] = useState<string | null>(null);
+  const [composingFields, setComposingFields] = useState<Set<string>>(() => new Set());
   const revision = useRef(0);
   const active = useRef<{ id: string; revision: number } | null>(null);
   const mounted = useRef(false);
   const editorSequence = useRef(0);
+  const requestSequence = useRef(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const errors = validatePreviewInput(input);
+  const errors = validatePreviewInput(input, `preview-${requestSequence.current + 1}`);
+  if (composingFields.size > 0) errors.push("Finish IME composition before Preview; intermediate text is not submitted evidence.");
   if (inputRejection) errors.push(inputRejection);
   if (affixBlank.prefix) errors.push("Enter text in every prefix row, or remove the row.");
   if (affixBlank.suffix) errors.push("Enter text in every suffix row, or remove the row.");
@@ -102,19 +124,52 @@ export default function CandidatePreview() {
     revision.current += 1;
     setDirty(true); setResult(null); setError(null); setInputRejection(message);
   }
-  const seedGuard = useRawTextGuard<HTMLTextAreaElement>("seeds", input.seedText, (seedText) => edit({ seedText }), rejectInput);
-  function addConstraint() {
-    if (input.directConstraints.length >= PREVIEW_LIMITS.directConstraints || editorSequence.current >= 0xffff_ffff) return;
+  function compositionChange(field: string, composing: boolean) {
+    if (!mounted.current) return;
+    if (composing) {
+      revision.current += 1;
+      setDirty(true); setResult(null); setError(null); setInputRejection(null);
+    }
+    setComposingFields((current) => {
+      const next = new Set(current);
+      if (composing) next.add(field); else next.delete(field);
+      return next;
+    });
+  }
+  function allocateEditorId(): number | null {
+    if (editorSequence.current >= 0xffff_ffff) return null;
     editorSequence.current += 1;
-    edit({ directConstraints: [...input.directConstraints, createDefaultDirectConstraint(editorSequence.current)] });
+    return editorSequence.current;
+  }
+  function addConstraint() {
+    if (input.directConstraints.length >= PREVIEW_LIMITS.directConstraints) return;
+    const editorId = allocateEditorId();
+    if (editorId !== null) edit({ directConstraints: [...input.directConstraints, createDefaultDirectConstraint(editorId)] });
+  }
+  function addClue() {
+    if (input.clues.length >= 8) return;
+    const editorId = allocateEditorId();
+    if (editorId !== null) edit({ clues: [...input.clues, { editorId, text: "", source: "" }] });
+  }
+  function addHypothesis(clueEditorId: number) {
+    if (input.hypotheses.length >= 8 || !input.clues.some((clue) => clue.editorId === clueEditorId)) return;
+    const editorId = allocateEditorId();
+    if (editorId !== null) edit({ hypotheses: [...input.hypotheses, createDefaultHypothesis(editorId, clueEditorId)] });
+  }
+  function addEffect(hypothesisEditorId: number) {
+    const hypothesis = input.hypotheses.find((row) => row.editorId === hypothesisEditorId);
+    if (!hypothesis || hypothesis.effects.length >= 4 || input.hypotheses.reduce((sum, row) => sum + row.effects.length, 0) >= 16) return;
+    const editorId = allocateEditorId();
+    if (editorId !== null) edit({ hypotheses: input.hypotheses.map((row) => row.editorId === hypothesisEditorId ?
+      { ...row, effects: [...row.effects, createDefaultEffect(editorId)] } : row) });
   }
   function clear() {
     revision.current += 1;
-    setInput(defaults()); setAffixBlank({ prefix: false, suffix: false }); setClearSequence((value) => value + 1); setDirty(false); setResult(null); setError(null); setInputRejection(null);
+    setInput(defaults()); setComposingFields(new Set()); setAffixBlank({ prefix: false, suffix: false }); setClearSequence((value) => value + 1); setDirty(false); setResult(null); setError(null); setInputRejection(null);
   }
   async function preview() {
     if (active.current || errors.length > 0) return;
-    const request = createPreviewRequest(input, `preview-${++requestSequence}`);
+    const request = createPreviewRequest(input, `preview-${++requestSequence.current}`);
     const current = { id: request.requestId, revision: revision.current };
     active.current = current;
     setPending(true); setResult(null); setError(null);
@@ -136,12 +191,15 @@ export default function CandidatePreview() {
     <h2 id="preview-title">Candidate Preview</h2>
     <p>Enter manual seeds and preview a bounded set of candidates generated by Rust Core.</p>
     <label htmlFor="seeds">Manual seeds — one per line</label>
-    <textarea {...seedGuard} id="seeds" rows={5} value={input.seedText} spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" aria-describedby="seed-help" />
+    <SeedInput key={clearSequence} value={input.seedText} onChange={(seedText) => edit({ seedText })} onRejected={rejectInput} onCompositionChange={compositionChange} />
     <p id="seed-help" className="hint">1–64 seeds, each 1–64 printable ASCII bytes (4,096 bytes total). Spaces and duplicate lines are preserved. LF/CRLF separate lines; one final newline is a terminator. Internal empty lines, tabs, controls, and non-ASCII text are invalid.</p>
     <fieldset><legend>Case variants</legend>{CASE_OPTIONS.map((option) => <label className="check" key={option.value}><input type="checkbox" checked={input.caseVariants.includes(option.value)} onChange={(event) => edit({ caseVariants: event.target.checked ? [...input.caseVariants, option.value] : input.caseVariants.filter((value) => value !== option.value) })} />{option.label}</label>)}</fieldset>
-    <div className="option-grid"><AffixOptions key={`prefix-${clearSequence}`} name="Prefix" onRejected={rejectInput} onChange={(prefixes, blank) => { setAffixBlank((current) => ({ ...current, prefix: blank })); edit({ prefixes }); }} /><AffixOptions key={`suffix-${clearSequence}`} name="Suffix" onRejected={rejectInput} onChange={(suffixes, blank) => { setAffixBlank((current) => ({ ...current, suffix: blank })); edit({ suffixes }); }} /></div>
+    <div className="option-grid"><AffixOptions key={`prefix-${clearSequence}`} name="Prefix" onRejected={rejectInput} onCompositionChange={compositionChange} onChange={(prefixes, blank) => { setAffixBlank((current) => ({ ...current, prefix: blank })); edit({ prefixes }); }} /><AffixOptions key={`suffix-${clearSequence}`} name="Suffix" onRejected={rejectInput} onCompositionChange={compositionChange} onChange={(suffixes, blank) => { setAffixBlank((current) => ({ ...current, suffix: blank })); edit({ suffixes }); }} /></div>
     <p className="hint">Only selected case variants are used, in the order shown. Generation order: Seed → Case → Prefix → Suffix. Affixes keep their case. Results outside the 1–64-byte domain are skipped, never truncated.</p>
-    <DirectConstraintEditor constraints={input.directConstraints} onAdd={addConstraint} canAdd={editorSequence.current < 0xffff_ffff} onChange={(directConstraints) => edit({ directConstraints })} onRejected={rejectInput} />
+    <DirectConstraintEditor constraints={input.directConstraints} onAdd={addConstraint} canAdd={editorSequence.current < 0xffff_ffff} onChange={(directConstraints) => edit({ directConstraints })} onRejected={rejectInput} onCompositionChange={compositionChange} />
+    <ClueHypothesisEditor clues={input.clues} hypotheses={input.hypotheses} onCluesChange={(clues) => edit({ clues })}
+      onHypothesesChange={(hypotheses) => edit({ hypotheses })} onAddClue={addClue} onAddHypothesis={addHypothesis} onAddEffect={addEffect}
+      onRejected={rejectInput} onCompositionChange={compositionChange} canAdd={editorSequence.current < 0xffff_ffff} />
     <div className="option-grid"><label>Attempt limit<input inputMode="numeric" value={input.attemptLimit} onChange={(event) => edit({ attemptLimit: event.target.value })} /><small>Default {PREVIEW_LIMITS.defaultAttempts}; maximum {PREVIEW_LIMITS.maxAttempts}.</small></label><label>Emission limit<input inputMode="numeric" value={input.emissionLimit} onChange={(event) => edit({ emissionLimit: event.target.value })} /><small>Default {PREVIEW_LIMITS.defaultEmissions}; maximum {PREVIEW_LIMITS.maxEmissions}.</small></label></div>
     {dirty && errors.length > 0 && <div role="alert"><ul>{errors.map((message) => <li key={message}>{message}</li>)}</ul></div>}
     <div className="actions"><button type="button" onClick={preview} disabled={pending || errors.length > 0}>{pending ? "Preview running…" : "Preview candidates"}</button><button type="button" className="secondary" onClick={clear}>Clear inputs and results</button></div>
@@ -152,6 +210,6 @@ export default function CandidatePreview() {
       {result && <PreviewResult result={result.response} request={result.request} />}
     </div>
     <p className="hint">One-shot local IPC: at most 16 KiB per request, 64 KiB per response, 100 candidate records, and one Rust preview at a time with no waiting queue. Attempts and emissions are independent limits. Interactive cancellation is unavailable.</p>
-    <p className="hint">Seeds, conditions, and candidates are kept in memory for this view, without logging, automatic saving, clipboard copying, or external transmission. Clear reduces retained references; it does not guarantee secure memory erasure. Transport allocations precede the adapter's raw-body limit.</p>
+    <p className="hint">Seeds, Clues, sources, interpretations, conditions, and candidates are kept in memory for this view, without logging, automatic saving, clipboard copying, or external transmission. Clear reduces retained references; it does not guarantee secure memory erasure. Transport allocations precede the adapter's raw-body limit.</p>
   </section>;
 }

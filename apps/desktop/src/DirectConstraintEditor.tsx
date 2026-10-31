@@ -12,6 +12,7 @@ interface EditorProps {
   onAdd: () => void;
   onRejected: (message: string) => void;
   canAdd?: boolean;
+  onCompositionChange?: (field: string, active: boolean) => void;
 }
 interface FieldProps {
   label: string;
@@ -19,49 +20,53 @@ interface FieldProps {
   numeric?: boolean;
   onChange: (value: string) => void;
   onRejected: (message: string) => void;
+  maxBytes?: number;
+  onCompositionChange?: (active: boolean) => void;
 }
-function ConstraintInput({ label, value, numeric = false, onChange, onRejected }: FieldProps) {
-  const guard = useRawTextGuard<HTMLInputElement>("constraint", value, onChange, onRejected);
-  return <label>{label}<input {...guard} type="text" inputMode={numeric ? "numeric" : undefined} value={value}
+function ConstraintInput({ label, value, numeric = false, onChange, onRejected, maxBytes, onCompositionChange }: FieldProps) {
+  const guard = useRawTextGuard<HTMLInputElement>("constraint", value, onChange, onRejected, { maxBytes, onCompositionChange });
+  return <label>{label}<input {...guard} type="text" inputMode={numeric ? "numeric" : undefined}
     spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" /></label>;
 }
 
-function ConstraintFields({ row, number, onChange, onRejected }: {
-  row: DirectConstraintDraft;
-  number: number;
-  onChange: (row: DirectConstraintDraft) => void;
+export function ConstraintFields({ constraint: value, label, onChange, onRejected, fieldId, onCompositionChange }: {
+  constraint: DirectConstraintDraft["constraint"];
+  label: string;
+  fieldId?: string;
+  onCompositionChange?: (field: string, active: boolean) => void;
+  onChange: (constraint: DirectConstraintDraft["constraint"]) => void;
   onRejected: (message: string) => void;
 }) {
-  const value = row.constraint;
-  const field = (label: string, text: string, change: (text: string) => void, numeric = false) =>
-    <ConstraintInput label={`Condition ${number} ${label}`} value={text} numeric={numeric} onChange={change} onRejected={onRejected} />;
+  const field = (name: string, text: string, change: (text: string) => void, numeric = false, maxBytes?: number) =>
+    <ConstraintInput label={`${label} ${name}`} value={text} numeric={numeric} maxBytes={maxBytes} onChange={change} onRejected={onRejected}
+      onCompositionChange={(active) => onCompositionChange?.(`${fieldId}:${name}`, active)} />;
   switch (value.type) {
     case "length":
     case "characterCount":
       return <>
-        {value.type === "characterCount" && <label>Condition {number} character class<select value={value.class}
-          onChange={(event) => onChange({ ...row, constraint: { ...value, class: event.target.value as CharacterClass } })}>
+        {value.type === "characterCount" && <label>{label} character class<select value={value.class}
+          onChange={(event) => onChange({ ...value, class: event.target.value as CharacterClass })}>
           {CHARACTER_CLASSES.map((characterClass) => <option value={characterClass} key={characterClass}>{characterClass}</option>)}
         </select></label>}
-        {field("minimum", value.min, (min) => onChange({ ...row, constraint: { ...value, min } }), true)}
-        {field("maximum", value.max, (max) => onChange({ ...row, constraint: { ...value, max } }), true)}
+        {field("minimum", value.min, (min) => onChange({ ...value, min }), true)}
+        {field("maximum", value.max, (max) => onChange({ ...value, max }), true)}
         <p className="hint">Inclusive whole-number range: {value.type === "length" ? "1" : "0"} ≤ min ≤ max ≤ 64.{value.type === "characterCount" && " Space is separate from symbol."}</p>
       </>;
     case "position":
       return <>
-        {field("position", value.index, (index) => onChange({ ...row, constraint: { ...value, index } }), true)}
-        {field("allowed characters", value.allowed, (allowed) => onChange({ ...row, constraint: { ...value, allowed } }))}
+        {field("position", value.index, (index) => onChange({ ...value, index }), true)}
+        {field("allowed characters", value.allowed, (allowed) => onChange({ ...value, allowed }), false, 95)}
         <p className="hint">One-based position, 1–64. Allowed characters are alternatives (1–95 printable ASCII bytes), not a substring or regular expression. Duplicates are permitted.</p>
       </>;
     default:
       return <>
-        {field("literal", value.literal, (literal) => onChange({ ...row, constraint: { ...value, literal } }))}
+        {field("literal", value.literal, (literal) => onChange({ ...value, literal }), false, 64)}
         <p className="hint">1–64 printable ASCII bytes. Case and surrounding spaces are preserved.</p>
       </>;
   }
 }
 
-export default function DirectConstraintEditor({ constraints, onChange, onAdd, onRejected, canAdd = true }: EditorProps) {
+export default function DirectConstraintEditor({ constraints, onChange, onAdd, onRejected, canAdd = true, onCompositionChange }: EditorProps) {
   const update = (editorId: number, row: DirectConstraintDraft) => onChange(constraints.map((current) => current.editorId === editorId ? row : current));
   return <section className="direct-constraints" aria-labelledby="direct-constraints-title">
     <h3 id="direct-constraints-title">Direct Constraints</h3>
@@ -80,8 +85,8 @@ export default function DirectConstraintEditor({ constraints, onChange, onAdd, o
           <option value="low">Low (1)</option><option value="medium">Medium (2)</option><option value="high">High (3)</option>
         </select></label>
       </div>
-      <div className="constraint-fields"><ConstraintFields key={`${row.editorId}:${row.constraint.type}`} row={row} number={index + 1}
-        onChange={(next) => update(row.editorId, next)} onRejected={onRejected} /></div>
+      <div className="constraint-fields"><ConstraintFields key={`${row.editorId}:${row.constraint.type}`} constraint={row.constraint} label={`Condition ${index + 1}`} fieldId={`direct-${row.editorId}`} onCompositionChange={onCompositionChange}
+        onChange={(constraint) => update(row.editorId, { ...row, constraint })} onRejected={onRejected} /></div>
       <button type="button" className="secondary" aria-label={`Remove condition ${index + 1}`} onClick={() => onChange(constraints.filter((current) => current.editorId !== row.editorId))}>Remove</button>
     </fieldset>)}
     <button type="button" className="secondary" onClick={onAdd} disabled={!canAdd || constraints.length >= DIRECT_CONSTRAINT_LIMITS.rows}>Add condition</button>

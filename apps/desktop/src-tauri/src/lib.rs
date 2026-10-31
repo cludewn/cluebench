@@ -112,21 +112,34 @@ mod tests {
                  "constraint":{"type":"prefix","literal":"synthetic"}},
                 {"editorId":42,"enabled":true,"applicability":"soft","confidence":"high",
                  "constraint":{"type":"suffix","literal":"!"}}
-            ]
+            ],
+            "clues":[{"editorId":43,"text":" Synthetic clue 🧩\n", "source":"Synthetic source"}],
+            "hypotheses":[{
+                "editorId":44,"clueEditorId":43,"interpretation":"Two effects, one Medium weight",
+                "enabled":true,"applicability":"soft","confidence":"medium",
+                "effects":[
+                    {"editorId":45,"constraint":{"type":"contains","literal":"1"}},
+                    {"editorId":46,"constraint":{"type":"suffix","literal":"!"}}
+                ]
+            }]
         });
         let raw = || ipc::InvokeBody::Raw(serde_json::to_vec(&payload).unwrap());
         let result = invoke(&main, local, "candidate_preview", raw()).unwrap();
         assert_eq!(result["candidates"][0]["text"], "synthetic1!");
-        assert_eq!(result["candidates"][0]["relativePoints"], 3);
+        assert_eq!(result["candidates"][0]["relativePoints"], 5);
         assert_eq!(
             result["candidates"][0]["matchedSoftHypothesisIds"],
-            serde_json::json!([4])
+            serde_json::json!([4, 7])
         );
         assert_eq!(
             result["constraintBindings"],
             serde_json::json!([
                 {"editorId":41,"hypothesisId":2}, {"editorId":42,"hypothesisId":4}
             ])
+        );
+        assert_eq!(
+            result["hypothesisBindings"],
+            serde_json::json!([{"editorId":44,"hypothesisId":7}])
         );
         assert_eq!(result["stop"], "completed");
         assert!(invoke(&other, local, "candidate_preview", raw()).is_err());

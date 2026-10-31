@@ -4,6 +4,8 @@
 
 import { serializeDirectConstraints, validateDirectConstraints } from "./direct-constraints";
 import type { DirectConstraint, DirectConstraintDraft } from "./direct-constraints";
+import { serializeClueHypotheses, validateClueHypotheses } from "./clue-hypotheses";
+import type { Clue, ClueDraft, Hypothesis, HypothesisDraft } from "./clue-hypotheses";
 
 export const PREVIEW_LIMITS = {
   requestBytes: 16 * 1024,
@@ -37,6 +39,8 @@ export interface PreviewRequest {
   options: { caseVariants: CaseVariant[]; prefixes: string[]; suffixes: string[] };
   limits: { attemptLimit: number; emissionLimit: number };
   directConstraints: DirectConstraint[];
+  clues: Clue[];
+  hypotheses: Hypothesis[];
 }
 export interface PreviewInput {
   seedText: string;
@@ -46,6 +50,8 @@ export interface PreviewInput {
   attemptLimit: string;
   emissionLimit: string;
   directConstraints: DirectConstraintDraft[];
+  clues: ClueDraft[];
+  hypotheses: HypothesisDraft[];
 }
 
 const encoder = new TextEncoder();
@@ -60,7 +66,7 @@ export function parseSeedLines(text: string): string[] {
   return lines;
 }
 
-export function validatePreviewInput(input: PreviewInput): string[] {
+export function validatePreviewInput(input: PreviewInput, requestId = "preview-1", checkRequestBudget = true): string[] {
   const errors: string[] = [];
   const seeds = parseSeedLines(input.seedText);
   if (seeds.length === 0) errors.push("Enter at least one manual seed.");
@@ -100,7 +106,11 @@ export function validatePreviewInput(input: PreviewInput): string[] {
       errors.push(`${name} must be an integer from 1 to ${max.toLocaleString("en-US")}.`);
     }
   }
-  return [...errors, ...validateDirectConstraints(input.directConstraints)];
+  errors.push(...validateDirectConstraints(input.directConstraints), ...validateClueHypotheses(input.clues, input.hypotheses, input.directConstraints));
+  if (checkRequestBudget && errors.length === 0 && utf8Bytes(JSON.stringify(createPreviewRequest(input, requestId))) > PREVIEW_LIMITS.requestBytes) {
+    errors.push("The preview request exceeds 16 KiB. Reduce the input.");
+  }
+  return [...new Set(errors)];
 }
 
 export function createPreviewRequest(input: PreviewInput, requestId: string): PreviewRequest {
@@ -114,5 +124,6 @@ export function createPreviewRequest(input: PreviewInput, requestId: string): Pr
     },
     limits: { attemptLimit: Number(input.attemptLimit), emissionLimit: Number(input.emissionLimit) },
     directConstraints: serializeDirectConstraints(input.directConstraints),
+    ...serializeClueHypotheses(input.clues, input.hypotheses),
   };
 }
