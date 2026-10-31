@@ -2,6 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import { serializeDirectConstraints, validateDirectConstraints } from "./direct-constraints";
+import type { DirectConstraint, DirectConstraintDraft } from "./direct-constraints";
+
 export const PREVIEW_LIMITS = {
   requestBytes: 16 * 1024,
   requestIdBytes: 32,
@@ -17,6 +20,9 @@ export const PREVIEW_LIMITS = {
   defaultEmissions: 50,
   maxEmissions: 100,
   responseBytes: 64 * 1024,
+  directConstraints: 16,
+  constraintLiteralBytes: 64,
+  allowedBytes: 95,
 } as const;
 
 export const CASE_OPTIONS = [
@@ -30,6 +36,7 @@ export interface PreviewRequest {
   seeds: string[];
   options: { caseVariants: CaseVariant[]; prefixes: string[]; suffixes: string[] };
   limits: { attemptLimit: number; emissionLimit: number };
+  directConstraints: DirectConstraint[];
 }
 export interface PreviewInput {
   seedText: string;
@@ -38,6 +45,7 @@ export interface PreviewInput {
   suffixes: string[];
   attemptLimit: string;
   emissionLimit: string;
+  directConstraints: DirectConstraintDraft[];
 }
 
 const encoder = new TextEncoder();
@@ -92,7 +100,7 @@ export function validatePreviewInput(input: PreviewInput): string[] {
       errors.push(`${name} must be an integer from 1 to ${max.toLocaleString("en-US")}.`);
     }
   }
-  return errors;
+  return [...errors, ...validateDirectConstraints(input.directConstraints)];
 }
 
 export function createPreviewRequest(input: PreviewInput, requestId: string): PreviewRequest {
@@ -105,5 +113,6 @@ export function createPreviewRequest(input: PreviewInput, requestId: string): Pr
       suffixes: [...input.suffixes],
     },
     limits: { attemptLimit: Number(input.attemptLimit), emissionLimit: Number(input.emissionLimit) },
+    directConstraints: serializeDirectConstraints(input.directConstraints),
   };
 }

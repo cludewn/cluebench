@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Bounded, manual-only one-shot preview. No secret-bearing type implements Debug.
+//! Bounded one-shot preview with direct conditions. No secret-bearing DTO implements Debug.
 
 use std::{
     ops::ControlFlow,
@@ -13,7 +13,9 @@ use std::{
 };
 
 use cluebench_core::{
-    CaseVariant, GenerationConfig, GenerationStats, GenerationStop, Id, RawProject, Seed,
+    Activation, Applicability, CaseVariant, CharacterClass, Confidence, Constraint,
+    ConstraintEffect, Effect, GenerationConfig, GenerationStats, GenerationStop, Hypothesis,
+    HypothesisOrigin, Id, RawProject, Seed,
 };
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -27,6 +29,10 @@ pub(crate) const MAX_CASE_OPTIONS: usize = 3;
 pub(crate) const MAX_AFFIX_OPTIONS: usize = 8;
 pub(crate) const MAX_AFFIX_BYTES: usize = 64;
 pub(crate) const MAX_CONFIG_BYTES: usize = 1043;
+pub(crate) const MAX_DIRECT_CONSTRAINTS: usize = 16;
+pub(crate) const MAX_LITERAL_BYTES: usize = 64;
+pub(crate) const MAX_ALLOWED_BYTES: usize = 95;
+pub(crate) const MAX_CONSTRAINT_STRING_BYTES: usize = 1520;
 pub(crate) const DEFAULT_ATTEMPT_LIMIT: u64 = 2048;
 pub(crate) const MAX_ATTEMPT_LIMIT: u64 = 4096;
 pub(crate) const DEFAULT_EMISSION_LIMIT: u64 = 50;
@@ -107,6 +113,149 @@ struct PreviewRequest {
     seeds: Vec<String>,
     options: PreviewOptions,
     limits: PreviewLimits,
+    #[serde(default)]
+    direct_constraints: Vec<DirectConstraint>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DirectConstraint {
+    editor_id: u32,
+    enabled: bool,
+    applicability: PreviewApplicability,
+    confidence: PreviewConfidence,
+    constraint: PreviewConstraint,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum PreviewApplicability {
+    Hard,
+    Soft,
+}
+
+impl From<PreviewApplicability> for Applicability {
+    fn from(value: PreviewApplicability) -> Self {
+        match value {
+            PreviewApplicability::Hard => Self::Hard,
+            PreviewApplicability::Soft => Self::Soft,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum PreviewConfidence {
+    Low,
+    Medium,
+    High,
+}
+
+impl From<PreviewConfidence> for Confidence {
+    fn from(value: PreviewConfidence) -> Self {
+        match value {
+            PreviewConfidence::Low => Self::Low,
+            PreviewConfidence::Medium => Self::Medium,
+            PreviewConfidence::High => Self::High,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum PreviewCharacterClass {
+    Lowercase,
+    Uppercase,
+    Digit,
+    Space,
+    Symbol,
+}
+
+impl From<PreviewCharacterClass> for CharacterClass {
+    fn from(value: PreviewCharacterClass) -> Self {
+        match value {
+            PreviewCharacterClass::Lowercase => Self::Lowercase,
+            PreviewCharacterClass::Uppercase => Self::Uppercase,
+            PreviewCharacterClass::Digit => Self::Digit,
+            PreviewCharacterClass::Space => Self::Space,
+            PreviewCharacterClass::Symbol => Self::Symbol,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum PreviewConstraint {
+    Length {
+        min: usize,
+        max: usize,
+    },
+    Position {
+        index: usize,
+        allowed: String,
+    },
+    Contains {
+        literal: String,
+    },
+    NotContains {
+        literal: String,
+    },
+    Prefix {
+        literal: String,
+    },
+    Suffix {
+        literal: String,
+    },
+    CharacterCount {
+        class: PreviewCharacterClass,
+        min: usize,
+        max: usize,
+    },
+}
+
+impl PreviewConstraint {
+    fn valid(&self) -> bool {
+        match self {
+            Self::Length { min, max } => 1 <= *min && min <= max && *max <= 64,
+            Self::Position { index, allowed } => {
+                (1..=64).contains(index) && printable_ascii(allowed, 1, MAX_ALLOWED_BYTES)
+            }
+            Self::Contains { literal }
+            | Self::NotContains { literal }
+            | Self::Prefix { literal }
+            | Self::Suffix { literal } => printable_ascii(literal, 1, MAX_LITERAL_BYTES),
+            Self::CharacterCount { min, max, .. } => min <= max && *max <= 64,
+        }
+    }
+
+    fn string_bytes(&self) -> usize {
+        match self {
+            Self::Position { allowed, .. } => allowed.len(),
+            Self::Contains { literal }
+            | Self::NotContains { literal }
+            | Self::Prefix { literal }
+            | Self::Suffix { literal } => literal.len(),
+            Self::Length { .. } | Self::CharacterCount { .. } => 0,
+        }
+    }
+}
+
+impl From<PreviewConstraint> for Constraint {
+    fn from(value: PreviewConstraint) -> Self {
+        match value {
+            PreviewConstraint::Length { min, max } => Self::Length { min, max },
+            PreviewConstraint::Position { index, allowed } => Self::Position { index, allowed },
+            PreviewConstraint::Contains { literal } => Self::Contains(literal),
+            PreviewConstraint::NotContains { literal } => Self::NotContains(literal),
+            PreviewConstraint::Prefix { literal } => Self::Prefix(literal),
+            PreviewConstraint::Suffix { literal } => Self::Suffix(literal),
+            PreviewConstraint::CharacterCount { class, min, max } => Self::CharacterCount {
+                class: class.into(),
+                min,
+                max,
+            },
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -142,6 +291,14 @@ struct PreviewResponse {
     stats: PreviewStats,
     potential_paths: u64,
     stop: PreviewStop,
+    constraint_bindings: Vec<ConstraintBinding>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConstraintBinding {
+    editor_id: u32,
+    hypothesis_id: u32,
 }
 
 #[derive(Serialize)]
@@ -153,6 +310,7 @@ struct PreviewCandidate {
     prefix: String,
     suffix: String,
     relative_points: u32,
+    matched_soft_hypothesis_ids: Vec<u32>,
 }
 
 #[derive(Serialize)]
@@ -260,10 +418,29 @@ impl PreviewRequest {
             + options.case_variants.len()
             + options.prefixes.iter().map(String::len).sum::<usize>()
             + options.suffixes.iter().map(String::len).sum::<usize>();
+        let constraints_valid = self.direct_constraints.len() <= MAX_DIRECT_CONSTRAINTS
+            && self
+                .direct_constraints
+                .iter()
+                .enumerate()
+                .all(|(index, row)| {
+                    row.editor_id != 0
+                        && self.direct_constraints[..index]
+                            .iter()
+                            .all(|previous| previous.editor_id != row.editor_id)
+                        && row.constraint.valid()
+                })
+            && self
+                .direct_constraints
+                .iter()
+                .map(|row| row.constraint.string_bytes())
+                .sum::<usize>()
+                <= MAX_CONSTRAINT_STRING_BYTES;
         if !(id_valid
             && seeds_valid
             && cases_valid
             && affixes_valid
+            && constraints_valid
             && config_bytes <= MAX_CONFIG_BYTES
             && (1..=MAX_ATTEMPT_LIMIT).contains(&limits.attempt_limit)
             && (1..=MAX_EMISSION_LIMIT).contains(&limits.emission_limit))
@@ -272,6 +449,56 @@ impl PreviewRequest {
         }
         Ok(())
     }
+}
+
+// The caller validates preview counts first, bounding every generated entity ID
+// to 96. Editor IDs remain independent of these request-local Core IDs.
+fn build_project(
+    seeds: Vec<String>,
+    direct_constraints: Vec<DirectConstraint>,
+) -> (RawProject, Vec<ConstraintBinding>) {
+    let seed_count = seeds.len() as u32;
+    let mut bindings = Vec::with_capacity(direct_constraints.len());
+    let hypotheses = direct_constraints
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let hypothesis_id = seed_count + 2 * index as u32 + 1;
+            bindings.push(ConstraintBinding {
+                editor_id: row.editor_id,
+                hypothesis_id,
+            });
+            Hypothesis {
+                id: Id(hypothesis_id),
+                origin: HypothesisOrigin::Manual,
+                interpretation: String::new(),
+                confidence: row.confidence.into(),
+                applicability: row.applicability.into(),
+                activation: Activation::Independent {
+                    enabled: row.enabled,
+                },
+                effects: vec![Effect::Constraint(ConstraintEffect {
+                    id: Id(hypothesis_id + 1),
+                    constraint: row.constraint.into(),
+                })],
+            }
+        })
+        .collect();
+    (
+        RawProject {
+            manual_seeds: seeds
+                .into_iter()
+                .enumerate()
+                .map(|(index, text)| Seed {
+                    id: Id((index + 1) as u32),
+                    text,
+                })
+                .collect(),
+            hypotheses,
+            ..RawProject::default()
+        },
+        bindings,
+    )
 }
 
 fn generate_preview(bytes: Vec<u8>) -> Result<String, PreviewError> {
@@ -290,20 +517,8 @@ fn generate_preview(bytes: Vec<u8>) -> Result<String, PreviewError> {
         attempt_limit: request.limits.attempt_limit,
         emission_limit: request.limits.emission_limit,
     };
-    let project = RawProject {
-        manual_seeds: request
-            .seeds
-            .into_iter()
-            .enumerate()
-            .map(|(index, text)| Seed {
-                id: Id((index + 1) as u32),
-                text,
-            })
-            .collect(),
-        ..RawProject::default()
-    }
-    .validate()
-    .map_err(|_| PreviewError::CoreFailed)?;
+    let (raw, constraint_bindings) = build_project(request.seeds, request.direct_constraints);
+    let project = raw.validate().map_err(|_| PreviewError::CoreFailed)?;
     let model = project.resolve();
     let mut candidates = Vec::with_capacity(config.emission_limit as usize);
     let result = model
@@ -325,6 +540,12 @@ fn generate_preview(bytes: Vec<u8>) -> Result<String, PreviewError> {
                     prefix: record.config().prefixes[path.prefix_index].clone(),
                     suffix: record.config().suffixes[path.suffix_index].clone(),
                     relative_points: record.evaluation().relative_points,
+                    matched_soft_hypothesis_ids: record
+                        .evaluation()
+                        .matched_soft_hypotheses
+                        .iter()
+                        .map(|id| id.0)
+                        .collect(),
                 });
                 ControlFlow::Continue(())
             },
@@ -342,6 +563,7 @@ fn generate_preview(bytes: Vec<u8>) -> Result<String, PreviewError> {
         stats: result.stats().into(),
         potential_paths: result.potential_paths(),
         stop: result.reason().into(),
+        constraint_bindings,
     };
     serialize_response(&response)
 }
@@ -433,6 +655,609 @@ mod tests {
         );
     }
 
+    fn condition(editor_id: u32, constraint: Value) -> Value {
+        json!({
+            "editorId": editor_id, "enabled": true,
+            "applicability": "hard", "confidence": "medium", "constraint": constraint
+        })
+    }
+
+    #[test]
+    fn every_constraint_uses_core_matching_and_preserves_exact_ascii_semantics() {
+        for (constraint, matching, rejected) in [
+            (json!({"type":"length","min":2,"max":3}), "Ab", "Abcd"),
+            (
+                json!({"type":"position","index":2,"allowed":"XXb b"}),
+                "Ab",
+                "bA",
+            ),
+            (json!({"type":"contains","literal":" b "}), "A b Z", "A B Z"),
+            (json!({"type":"notContains","literal":"b"}), "AB", "Ab"),
+            (json!({"type":"prefix","literal":" Ab"}), " Abz", "Abz"),
+            (json!({"type":"suffix","literal":"b "}), "Ab ", "Ab"),
+            (
+                json!({"type":"characterCount","class":"lowercase","min":1,"max":1}),
+                "Ab!",
+                "AB!",
+            ),
+            (
+                json!({"type":"characterCount","class":"uppercase","min":1,"max":1}),
+                "Ab!",
+                "ab!",
+            ),
+            (
+                json!({"type":"characterCount","class":"digit","min":1,"max":1}),
+                "A1!",
+                "Ab!",
+            ),
+            (
+                json!({"type":"characterCount","class":"space","min":1,"max":1}),
+                "A !",
+                "Ab!",
+            ),
+            (
+                json!({"type":"characterCount","class":"symbol","min":1,"max":1}),
+                "A !",
+                "A  ",
+            ),
+        ] {
+            let mut request = fixture();
+            request["seeds"] = json!([matching, rejected]);
+            request["directConstraints"] = json!([condition(11, constraint)]);
+            let response = generate(&request).unwrap();
+            assert_eq!(response["candidates"].as_array().unwrap().len(), 1);
+            assert_eq!(response["candidates"][0]["text"], matching);
+            assert_eq!(response["stats"]["hardRejections"], 1);
+            assert_eq!(
+                response["constraintBindings"],
+                json!([{"editorId":11,"hypothesisId":3}])
+            );
+            assert_eq!(
+                response["candidates"][0]["matchedSoftHypothesisIds"],
+                json!([])
+            );
+            assert_accounting(&response);
+        }
+    }
+
+    #[test]
+    fn valid_constraint_boundaries_and_disabled_rows_are_preserved() {
+        let mut request = fixture();
+        for constraint in [
+            json!({"type":"length","min":1,"max":64}),
+            json!({"type":"length","min":64,"max":64}),
+            json!({"type":"position","index":1,"allowed":" "}),
+            json!({"type":"position","index":64,"allowed":"x".repeat(95)}),
+            json!({"type":"characterCount","class":"digit","min":0,"max":0}),
+            json!({"type":"characterCount","class":"symbol","min":64,"max":64}),
+        ]
+        .into_iter()
+        .chain(
+            ["contains", "notContains", "prefix", "suffix"]
+                .into_iter()
+                .flat_map(|kind| {
+                    [
+                        json!({"type":kind,"literal":" "}),
+                        json!({"type":kind,"literal":"x".repeat(64)}),
+                    ]
+                }),
+        ) {
+            let mut row = condition(u32::MAX, constraint);
+            row["enabled"] = json!(false);
+            request["directConstraints"] = json!([row]);
+            let response = generate(&request).unwrap();
+            assert_eq!(response["stats"]["hardRejections"], 0);
+            assert_eq!(response["candidates"][0]["text"], "Ab");
+            assert_eq!(
+                response["constraintBindings"],
+                json!([{"editorId":u32::MAX,"hypothesisId":2}])
+            );
+        }
+    }
+
+    #[test]
+    fn every_invalid_constraint_value_is_rejected_even_when_disabled() {
+        let mut invalid = vec![
+            json!({"type":"length","min":0,"max":64}),
+            json!({"type":"length","min":1,"max":65}),
+            json!({"type":"length","min":3,"max":2}),
+            json!({"type":"position","index":0,"allowed":"x"}),
+            json!({"type":"position","index":65,"allowed":"x"}),
+            json!({"type":"position","index":1,"allowed":"x".repeat(96)}),
+            json!({"type":"position","index":1,"allowed":""}),
+            json!({"type":"characterCount","class":"digit","min":0,"max":65}),
+            json!({"type":"characterCount","class":"digit","min":2,"max":1}),
+            json!({"type":"characterCount","class":"unknown","min":0,"max":1}),
+        ];
+        for literal in [
+            "".to_string(),
+            "x".repeat(65),
+            "x\r".into(),
+            "x\n".into(),
+            "\t".into(),
+            "é".into(),
+            "\u{7f}".into(),
+        ] {
+            for kind in ["contains", "notContains", "prefix", "suffix"] {
+                invalid.push(json!({"type":kind,"literal":literal}));
+            }
+            if !printable_ascii(&literal, 1, MAX_ALLOWED_BYTES) {
+                invalid.push(json!({"type":"position","index":1,"allowed":literal}));
+            }
+        }
+        for constraint in invalid {
+            for enabled in [false, true] {
+                let mut request = fixture();
+                let mut row = condition(1, constraint.clone());
+                row["enabled"] = json!(enabled);
+                request["directConstraints"] = json!([row]);
+                assert_invalid(request);
+            }
+        }
+    }
+
+    #[test]
+    fn hard_conditions_intersect_and_soft_matches_keep_core_points_and_order() {
+        let mut request = fixture();
+        request["seeds"] = json!(["Ab1", "AB1", "Ab2", "Ab1"]);
+        let mut rows = vec![
+            condition(9, json!({"type":"prefix","literal":"A"})),
+            condition(4, json!({"type":"suffix","literal":"1"})),
+        ];
+        for (index, confidence) in ["low", "medium", "high"].into_iter().enumerate() {
+            let mut row = condition(20 + index as u32, json!({"type":"contains","literal":"b"}));
+            row["applicability"] = json!("soft");
+            row["confidence"] = json!(confidence);
+            rows.push(row);
+        }
+        let mut disabled = condition(99, json!({"type":"contains","literal":"A"}));
+        disabled["applicability"] = json!("soft");
+        disabled["enabled"] = json!(false);
+        rows.push(disabled);
+        request["directConstraints"] = json!(rows);
+        let output = generate(&request).unwrap();
+        let records = output["candidates"].as_array().unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record["text"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["Ab1", "AB1", "Ab1"]
+        );
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record["relativePoints"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [6, 0, 6]
+        );
+        assert_eq!(records[0]["matchedSoftHypothesisIds"], json!([9, 11, 13]));
+        assert_eq!(records[1]["matchedSoftHypothesisIds"], json!([]));
+        assert_eq!(output["stats"]["hardRejections"], 1);
+        assert_eq!(
+            output["constraintBindings"],
+            json!([
+                {"editorId":9,"hypothesisId":5},{"editorId":4,"hypothesisId":7},
+                {"editorId":20,"hypothesisId":9},{"editorId":21,"hypothesisId":11},
+                {"editorId":22,"hypothesisId":13},{"editorId":99,"hypothesisId":15}
+            ])
+        );
+        assert_accounting(&output);
+        // Soft-only rows never reject or sort: unmatched seeds stay in Core order.
+        request["directConstraints"] = json!(&rows[2..]);
+        let output = generate(&request).unwrap();
+        assert_eq!(output["candidates"].as_array().unwrap().len(), 4);
+        assert_eq!(output["stats"]["hardRejections"], 0);
+        assert_eq!(output["candidates"][2]["relativePoints"], 6);
+    }
+
+    #[test]
+    fn confidence_maps_to_one_two_three_and_does_not_change_hard_eligibility() {
+        for (confidence, points) in [("low", 1), ("medium", 2), ("high", 3)] {
+            let mut request = fixture();
+            let mut row = condition(1, json!({"type":"contains","literal":"A"}));
+            row["confidence"] = json!(confidence);
+            row["applicability"] = json!("soft");
+            request["directConstraints"] = json!([row]);
+            let response = generate(&request).unwrap();
+            assert_eq!(response["candidates"][0]["relativePoints"], points);
+            assert_eq!(
+                response["candidates"][0]["matchedSoftHypothesisIds"],
+                json!([2])
+            );
+            request["directConstraints"][0]["applicability"] = json!("hard");
+            let response = generate(&request).unwrap();
+            assert_eq!(response["candidates"][0]["relativePoints"], 0);
+            assert_eq!(response["stats"]["hardRejections"], 0);
+        }
+    }
+
+    #[test]
+    fn all_hard_rejected_and_domain_skips_preserve_completed_and_limited_stops() {
+        let mut request = fixture();
+        request["seeds"] = json!(["A", "B", "x".repeat(64)]);
+        request["options"]["prefixes"] = json!(["", "!"]);
+        request["directConstraints"] = json!([
+            condition(1, json!({"type":"contains","literal":"A"})),
+            condition(2, json!({"type":"notContains","literal":"A"}))
+        ]);
+        let output = generate(&request).unwrap();
+        assert_eq!(output["stop"], "completed");
+        assert_eq!(
+            output["stats"],
+            json!({"attemptedPaths":6,"domainSkips":1,"hardRejections":5,"emittedCandidates":0})
+        );
+        assert!(output["candidates"].as_array().unwrap().is_empty());
+        assert_accounting(&output);
+        request["limits"]["attemptLimit"] = json!(2);
+        let output = generate(&request).unwrap();
+        assert_eq!(output["stop"], "attemptLimit");
+        assert_eq!(output["stats"]["hardRejections"], 2);
+        assert_accounting(&output);
+    }
+
+    #[test]
+    fn core_ids_are_noncolliding_bounded_and_independent_of_editor_ids() {
+        let mut request = fixture();
+        request["seeds"] = json!(vec!["Ab"; 64]);
+        request["directConstraints"] = json!(
+            (0..16)
+                .map(|i| condition(u32::MAX - i, json!({"type":"length","min":1,"max":64})))
+                .collect::<Vec<_>>()
+        );
+        let decoded: PreviewRequest = serde_json::from_value(request).unwrap();
+        assert!(decoded.validate().is_ok());
+        let (project, bindings) = build_project(decoded.seeds, decoded.direct_constraints);
+        assert!(project.clues.is_empty());
+        assert!(project.alternative_groups.is_empty());
+        let mut all_ids = std::collections::BTreeSet::new();
+        for (index, seed) in project.manual_seeds.iter().enumerate() {
+            assert_eq!(seed.id, Id(index as u32 + 1));
+            assert!(all_ids.insert(seed.id));
+        }
+        for (index, hypothesis) in project.hypotheses.iter().enumerate() {
+            assert_eq!(hypothesis.id, Id(65 + 2 * index as u32));
+            assert_eq!(hypothesis.origin, HypothesisOrigin::Manual);
+            assert_eq!(
+                hypothesis.activation,
+                Activation::Independent { enabled: true }
+            );
+            assert_eq!(hypothesis.effects.len(), 1);
+            assert!(all_ids.insert(hypothesis.id));
+            let Effect::Constraint(effect) = &hypothesis.effects[0] else {
+                panic!("constraint expected")
+            };
+            assert_eq!(effect.id, Id(66 + 2 * index as u32));
+            assert!(all_ids.insert(effect.id));
+            assert_eq!(bindings[index].hypothesis_id, hypothesis.id.0);
+            assert_eq!(bindings[index].editor_id, u32::MAX - index as u32);
+        }
+        assert_eq!(all_ids.len(), 96);
+        assert_eq!(all_ids.last(), Some(&Id(96)));
+        assert!(project.validate().is_ok());
+    }
+
+    #[test]
+    fn constraint_count_and_editor_id_boundaries_are_enforced() {
+        let row = condition(1, json!({"type":"length","min":1,"max":64}));
+        let mut request = fixture();
+        for count in [0, 16] {
+            request["directConstraints"] = json!(
+                (0..count)
+                    .map(|i| condition(i + 1, row["constraint"].clone()))
+                    .collect::<Vec<_>>()
+            );
+            assert!(generate(&request).is_ok());
+        }
+        request["directConstraints"] = json!(
+            (0..17)
+                .map(|i| condition(i + 1, row["constraint"].clone()))
+                .collect::<Vec<_>>()
+        );
+        assert_invalid(request.clone());
+        for bad in [
+            json!(0),
+            json!(-1),
+            json!(4294967296_u64),
+            json!(1.5),
+            json!("1"),
+            json!(null),
+        ] {
+            let mut bad_row = row.clone();
+            bad_row["editorId"] = bad;
+            request["directConstraints"] = json!([bad_row]);
+            assert_invalid(request.clone());
+        }
+        request["directConstraints"] = json!([row.clone(), row]);
+        assert_invalid(request);
+    }
+
+    #[test]
+    fn constraint_dto_rejects_missing_unknown_null_and_invalid_scalar_fields() {
+        let row = condition(
+            1,
+            json!({"type":"characterCount","class":"digit","min":0,"max":64}),
+        );
+        let mut request = fixture();
+        request["directConstraints"] = json!(null);
+        assert_invalid(request.clone());
+        for field in [
+            "editorId",
+            "enabled",
+            "applicability",
+            "confidence",
+            "constraint",
+        ] {
+            let mut missing = row.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            request["directConstraints"] = json!([missing]);
+            assert_invalid(request.clone());
+        }
+        for pointer in ["", "/constraint"] {
+            let mut unexpected = row.clone();
+            unexpected
+                .pointer_mut(pointer)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("hypothesisId".into(), json!(42));
+            request["directConstraints"] = json!([unexpected]);
+            assert_invalid(request.clone());
+        }
+        for (pointer, bad) in [
+            ("/enabled", json!(1)),
+            ("/enabled", json!("false")),
+            ("/applicability", json!("unknown")),
+            ("/confidence", json!("unknown")),
+            ("/constraint/type", json!("unknown")),
+            ("/constraint/min", json!(1.5)),
+            ("/constraint/max", json!(-1)),
+            ("/constraint/max", json!("64")),
+            ("/constraint/min", json!(null)),
+            ("/constraint/class", json!(1)),
+        ] {
+            let mut invalid = row.clone();
+            *invalid.pointer_mut(pointer).unwrap() = bad;
+            request["directConstraints"] = json!([invalid]);
+            assert_invalid(request.clone());
+        }
+        for (constraint, missing) in [
+            (json!({"type":"length","min":1,"max":64}), "min"),
+            (
+                json!({"type":"position","index":1,"allowed":"x"}),
+                "allowed",
+            ),
+            (json!({"type":"contains","literal":"x"}), "literal"),
+            (row["constraint"].clone(), "class"),
+        ] {
+            let mut constraint = constraint;
+            constraint.as_object_mut().unwrap().remove(missing);
+            request["directConstraints"] = json!([condition(1, constraint)]);
+            assert_invalid(request.clone());
+        }
+    }
+
+    #[test]
+    fn direct_serde_rejects_duplicate_fields_at_each_new_dto_level() {
+        let mut request = fixture();
+        request["directConstraints"] =
+            json!([condition(1, json!({"type":"length","min":1,"max":64}))]);
+        let serialized = serde_json::to_string(&request).unwrap();
+        for (needle, duplicate) in [
+            (
+                "\"directConstraints\":",
+                "\"directConstraints\":[],\"directConstraints\":",
+            ),
+            ("\"editorId\":", "\"editorId\":2,\"editorId\":"),
+            ("\"enabled\":", "\"enabled\":false,\"enabled\":"),
+            (
+                "\"applicability\":",
+                "\"applicability\":\"soft\",\"applicability\":",
+            ),
+            ("\"confidence\":", "\"confidence\":\"low\",\"confidence\":"),
+            (
+                "\"constraint\":",
+                "\"constraint\":{\"type\":\"length\",\"min\":1,\"max\":2},\"constraint\":",
+            ),
+            ("\"type\":", "\"type\":\"length\",\"type\":"),
+            ("\"min\":", "\"min\":1,\"min\":"),
+            ("\"max\":", "\"max\":64,\"max\":"),
+        ] {
+            let bytes = serialized.replacen(needle, duplicate, 1).into_bytes();
+            assert_eq!(generate_preview(bytes), Err(PreviewError::InvalidRequest));
+        }
+        for constraint in [
+            "{\"type\":\"position\",\"index\":1,\"index\":2,\"allowed\":\"A\"}",
+            "{\"type\":\"position\",\"index\":1,\"allowed\":\"A\",\"allowed\":\"B\"}",
+            "{\"type\":\"contains\",\"literal\":\"A\",\"literal\":\"B\"}",
+            "{\"type\":\"characterCount\",\"class\":\"digit\",\"class\":\"space\",\"min\":0,\"max\":1}",
+        ] {
+            let bytes = serialized
+                .replace("{\"max\":64,\"min\":1,\"type\":\"length\"}", constraint)
+                .into_bytes();
+            assert_eq!(generate_preview(bytes), Err(PreviewError::InvalidRequest));
+        }
+    }
+
+    #[test]
+    fn maximum_canonical_escaped_request_fits_raw_bound_and_expanded_text_does_not() {
+        let escaped = "\"".repeat(64);
+        let affixes: Vec<_> = (0_u32..8)
+            .map(|index| {
+                (0..64)
+                    .map(|bit| {
+                        if bit < 3 && index & (1 << bit) != 0 {
+                            '\\'
+                        } else {
+                            '\"'
+                        }
+                    })
+                    .collect::<String>()
+            })
+            .collect();
+        let mut request = fixture();
+        request["requestId"] = json!("x".repeat(32));
+        request["seeds"] = json!(vec![escaped; 64]);
+        request["options"] = json!({"caseVariants":["original","asciiLowercase","asciiUppercase"],"prefixes":affixes,"suffixes":affixes});
+        request["limits"] = json!({"attemptLimit":4096,"emissionLimit":100});
+        request["directConstraints"] = json!(
+            (0..16)
+                .map(|i| {
+                    let mut row = condition(
+                        u32::MAX - i,
+                        json!({"type":"position","index":64,"allowed":"\"".repeat(95)}),
+                    );
+                    row["enabled"] = json!(false);
+                    row
+                })
+                .collect::<Vec<_>>()
+        );
+        let bytes = serde_json::to_vec(&request).unwrap();
+        // Every payload byte requiring JSON escaping doubles; all shape counts,
+        // identifier widths, and Position payloads use their maximum values.
+        assert_eq!(bytes.len(), 16_023);
+        assert!(generate(&request).is_ok());
+        let expanded = String::from_utf8(bytes)
+            .unwrap()
+            .replace("\\\"", "\\u0022")
+            .into_bytes();
+        assert!(expanded.len() > MAX_REQUEST_BYTES);
+        assert_eq!(
+            bounded_body(&InvokeBody::Raw(expanded)),
+            Err(PreviewError::RequestTooLarge)
+        );
+    }
+
+    #[test]
+    fn maximum_match_lists_and_escaped_candidates_remain_within_response_bound() {
+        let mut request = fixture();
+        request["requestId"] = json!("x".repeat(32));
+        request["seeds"] = json!(vec!["\""; 64]);
+        let affixes = |length| {
+            (0_u32..8)
+                .map(|index| {
+                    (0..length)
+                        .map(|bit| {
+                            if bit < 3 && index & (1 << bit) != 0 {
+                                '\\'
+                            } else {
+                                '\"'
+                            }
+                        })
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+        request["options"] = json!({"caseVariants":["original","asciiLowercase","asciiUppercase"],"prefixes":affixes(31),"suffixes":affixes(32)});
+        request["limits"] = json!({"attemptLimit":4096,"emissionLimit":100});
+        request["directConstraints"] = json!(
+            (0..16)
+                .map(|i| {
+                    let mut row = condition(
+                        u32::MAX - i,
+                        json!({"type":"position","index":1,"allowed":"\"\\"}),
+                    );
+                    row["applicability"] = json!("soft");
+                    row["confidence"] = json!("high");
+                    row
+                })
+                .collect::<Vec<_>>()
+        );
+        let response = generate(&request).unwrap();
+        let serialized = serde_json::to_vec(&response).unwrap();
+        assert!(serialized.len() <= 50_963);
+        assert_eq!(response["candidates"].as_array().unwrap().len(), 100);
+        for candidate in response["candidates"].as_array().unwrap() {
+            assert_eq!(candidate["text"].as_str().unwrap().len(), 64);
+            assert_eq!(candidate["relativePoints"], 48);
+            assert_eq!(
+                candidate["matchedSoftHypothesisIds"],
+                json!((0..16).map(|i| 65 + 2 * i).collect::<Vec<_>>())
+            );
+        }
+        assert_eq!(response["stop"], "outputLimit");
+        assert_accounting(&response);
+        // A conservative serialized DTO uses maximum field widths. Any emitted
+        // candidate has at most 63 total affix bytes (at least one seed byte).
+        // Path/counter maxima need not occur together; the longest stop name
+        // also bounds Core stop variants this preview never manufactures.
+        let artificial = PreviewResponse {
+            request_id: "x".repeat(32),
+            effective_limits: PreviewLimits {
+                attempt_limit: 4096,
+                emission_limit: 100,
+            },
+            candidates: (0..100)
+                .map(|_| PreviewCandidate {
+                    text: "\"".repeat(64),
+                    seed_id: 64,
+                    path: PreviewPath {
+                        seed_index: 63,
+                        case_index: 2,
+                        case_variant: PreviewCase::AsciiLowercase,
+                        prefix_index: 7,
+                        suffix_index: 7,
+                    },
+                    prefix: "\"".repeat(31),
+                    suffix: "\"".repeat(32),
+                    relative_points: 48,
+                    matched_soft_hypothesis_ids: (0..16).map(|i| 65 + 2 * i).collect(),
+                })
+                .collect(),
+            stats: PreviewStats {
+                attempted_paths: 4096,
+                domain_skips: 4096,
+                hard_rejections: 4096,
+                emitted_candidates: 100,
+            },
+            potential_paths: 12288,
+            stop: PreviewStop::ConsumerStopped,
+            constraint_bindings: (0..16)
+                .map(|i| ConstraintBinding {
+                    editor_id: u32::MAX - i,
+                    hypothesis_id: 65 + 2 * i,
+                })
+                .collect(),
+        };
+        let artificial_bytes = serialize_response(&artificial).unwrap().len();
+        assert_eq!(artificial_bytes, 50_963);
+        assert!(artificial_bytes <= MAX_RESPONSE_BYTES);
+        eprintln!(
+            "synthetic serialized response: {} bytes; conservative DTO: {} bytes",
+            serialized.len(),
+            artificial_bytes
+        );
+    }
+
+    #[test]
+    fn bounded_synthetic_matching_workloads_exhaust_maximum_attempts() {
+        let mut request = fixture();
+        request["seeds"] = json!(vec!["a".repeat(50); 64]);
+        let affixes: Vec<_> = (0..8).map(|length| "a".repeat(length)).collect();
+        request["options"] =
+            json!({"caseVariants":["original"],"prefixes":affixes,"suffixes":affixes});
+        request["limits"] = json!({"attemptLimit":4096,"emissionLimit":100});
+        for constraint in [
+            json!({"type":"contains","literal":format!("{}b", "a".repeat(31))}),
+            json!({"type":"position","index":1,"allowed":"b".repeat(95)}),
+            json!({"type":"characterCount","class":"lowercase","min":0,"max":0}),
+        ] {
+            request["directConstraints"] = json!(
+                (0..16)
+                    .map(|i| condition(i + 1, constraint.clone()))
+                    .collect::<Vec<_>>()
+            );
+            let response = generate(&request).unwrap();
+            assert_eq!(response["potentialPaths"], 4096);
+            assert_eq!(response["stop"], "completed");
+            assert_eq!(
+                response["stats"],
+                json!({"attemptedPaths":4096,"domainSkips":0,"hardRejections":4096,"emittedCandidates":0})
+            );
+            assert_accounting(&response);
+        }
+    }
+
     #[test]
     fn raw_request_uses_actual_core_and_returns_owned_json_response() {
         let state = PreviewState::default();
@@ -445,7 +1270,7 @@ mod tests {
             json!({
                 "text":"Ab", "seedId":1,
                 "path":{"seedIndex":0,"caseIndex":0,"caseVariant":"original","prefixIndex":0,"suffixIndex":0},
-                "prefix":"", "suffix":"", "relativePoints":0
+                "prefix":"", "suffix":"", "relativePoints":0, "matchedSoftHypothesisIds":[]
             })
         );
         assert_eq!(value["stop"], "completed");
@@ -737,6 +1562,7 @@ mod tests {
             stats: GenerationStats::default().into(),
             potential_paths: 0,
             stop: PreviewStop::Completed,
+            constraint_bindings: vec![],
         };
         let overhead = serialize_response(&response).unwrap().len();
         // Artificial DTO tests a defensive output boundary beyond valid requests.

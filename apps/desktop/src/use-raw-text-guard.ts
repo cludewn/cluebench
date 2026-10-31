@@ -6,14 +6,16 @@ import { useEffect, useRef } from "react";
 import type { ChangeEvent, ClipboardEvent, DragEvent } from "react";
 
 type TextField = HTMLInputElement | HTMLTextAreaElement;
-type TextDomain = "seeds" | "affix";
+type TextDomain = "seeds" | "affix" | "constraint";
 
 const messages = {
   seeds: "Input rejected. Use LF or CRLF between seed lines; a lone CR is not allowed.",
   affix: "Input rejected. Prefix and suffix options cannot contain CR or LF.",
+  constraint: "Input rejected. Direct condition fields cannot contain control characters.",
 } as const;
 
 function forbiddenLineEnding(domain: TextDomain, text: string): boolean {
+  if (domain === "constraint") return /[\x00-\x1f\x7f]/.test(text);
   return domain === "seeds" ? /\r(?!\n)/.test(text) : /[\r\n]/.test(text);
 }
 
@@ -34,7 +36,7 @@ export function useRawTextGuard<T extends TextField>(
       if (!(event instanceof InputEvent)) return;
       rejectedInput.current = null;
       const rawTexts = [event.data, event.dataTransfer?.getData("text/plain")];
-      const lineBreak = domain === "affix" &&
+      const lineBreak = domain !== "seeds" &&
         (event.inputType === "insertLineBreak" || event.inputType === "insertParagraph");
       if (!lineBreak && !rawTexts.some((raw) => typeof raw === "string" && forbiddenLineEnding(domain, raw))) return;
       if (event.cancelable) event.preventDefault();

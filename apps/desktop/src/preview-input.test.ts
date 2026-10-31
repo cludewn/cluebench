@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { createPreviewRequest, parseSeedLines, utf8Bytes, validatePreviewInput } from "./preview-input";
 import type { PreviewInput } from "./preview-input";
-const input = (patch: Partial<PreviewInput> = {}): PreviewInput => ({ seedText: "A", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", ...patch });
+const input = (patch: Partial<PreviewInput> = {}): PreviewInput => ({ directConstraints: [], seedText: "A", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", ...patch });
 
 describe("Manual preview input", () => {
   it.each([
@@ -43,7 +43,7 @@ describe("Manual preview input", () => {
   });
   it("builds an explicit DTO in fixed selected-case order without Original injection", () => {
     expect(createPreviewRequest(input({ seedText: " A \nA\nA\n", caseVariants: ["asciiUppercase", "asciiLowercase"], prefixes: ["X", ""], suffixes: [" "] }), "p1")).toEqual({
-      requestId: "p1", seeds: [" A ", "A", "A"], options: { caseVariants: ["asciiLowercase", "asciiUppercase"], prefixes: ["X", ""], suffixes: [" "] }, limits: { attemptLimit: 2048, emissionLimit: 50 },
+      directConstraints: [], requestId: "p1", seeds: [" A ", "A", "A"], options: { caseVariants: ["asciiLowercase", "asciiUppercase"], prefixes: ["X", ""], suffixes: [" "] }, limits: { attemptLimit: 2048, emissionLimit: 50 },
     });
   });
 });
