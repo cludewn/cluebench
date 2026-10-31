@@ -39,10 +39,10 @@ function transfer(target: Element, route: "paste" | "drop", raw: string) {
 }
 function successfulResponse(request: PreviewRequest): PreviewResponse {
   return {
-    requestId: request.requestId, effectiveLimits: request.limits,
+    requestId: request.requestId, effectiveLimits: request.limits, constraintBindings: [],
     candidates: [{ text: request.seeds[0], seedId: 1, path: { seedIndex: 0, caseIndex: 0,
       caseVariant: request.options.caseVariants[0], prefixIndex: 0, suffixIndex: 0 },
-      prefix: request.options.prefixes[0], suffix: request.options.suffixes[0], relativePoints: 0 }],
+      prefix: request.options.prefixes[0], suffix: request.options.suffixes[0], relativePoints: 0, matchedSoftHypothesisIds: [] }],
     stats: { attemptedPaths: 1, domainSkips: 0, hardRejections: 0, emittedCandidates: 1 },
     potentialPaths: 1, stop: "completed",
   };

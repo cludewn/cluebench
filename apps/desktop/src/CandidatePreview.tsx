@@ -8,8 +8,10 @@ import type { CaseVariant, PreviewInput } from "./preview-input";
 import { PreviewError, runCandidatePreview, safePreviewError } from "./preview-bridge";
 import type { PreviewResponse } from "./preview-bridge";
 import { useRawTextGuard } from "./use-raw-text-guard";
+import DirectConstraintEditor from "./DirectConstraintEditor";
+import { createDefaultDirectConstraint, describeDirectConstraint } from "./direct-constraints";
 
-const defaults = (): PreviewInput => ({ seedText: "", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50" });
+const defaults = (): PreviewInput => ({ seedText: "", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", directConstraints: [] });
 let requestSequence = 0;
 const stopLabels = { completed: "Completed", attemptLimit: "AttemptLimit", outputLimit: "OutputLimit", cancelled: "Cancelled", consumerStopped: "ConsumerStopped" } as const;
 const caseLabel = (value: CaseVariant) => CASE_OPTIONS.find((option) => option.value === value)?.label;
@@ -38,7 +40,7 @@ function AffixOptions({ name, onChange, onRejected }: { name: "Prefix" | "Suffix
   </fieldset>;
 }
 
-function PreviewResult({ result }: { result: PreviewResponse }) {
+function PreviewResult({ result, request }: { result: PreviewResponse; request: ReturnType<typeof createPreviewRequest> }) {
   const empty = result.candidates.length === 0;
   const limited = result.stop === "attemptLimit" || result.stop === "outputLimit";
   return <section aria-label="Preview result">
@@ -56,15 +58,20 @@ function PreviewResult({ result }: { result: PreviewResponse }) {
     <p className="hint">Completed means all selected generation paths were examined. It does not cover the entire password space. Zero candidates does not prove unsatisfiability.</p>
     {result.candidates.length > 0 && <div className="candidate-scroll"><table>
       <caption>Candidate records in Core generation order</caption>
-      <thead><tr><th>Candidate</th><th>Seed / path</th><th>Transformation</th><th>Relative points</th></tr></thead>
+      <thead><tr><th>Candidate</th><th>Seed / path</th><th>Transformation</th><th>Relative points</th><th>Matched Soft conditions</th></tr></thead>
       <tbody>{result.candidates.map((candidate) => <tr key={[candidate.path.seedIndex, candidate.path.caseIndex, candidate.path.prefixIndex, candidate.path.suffixIndex].join(":")}>
         <td><code className="secret-text">{candidate.text}</code></td>
         <td>Seed {candidate.seedId} (line {candidate.path.seedIndex + 1})<br /><small>Path {candidate.path.seedIndex}/{candidate.path.caseIndex}/{candidate.path.prefixIndex}/{candidate.path.suffixIndex}</small></td>
         <td>{caseLabel(candidate.path.caseVariant)}<br />Prefix: <code className="secret-text">{candidate.prefix === "" ? "(none)" : candidate.prefix}</code><br />Suffix: <code className="secret-text">{candidate.suffix === "" ? "(none)" : candidate.suffix}</code></td>
         <td>{candidate.relativePoints}</td>
+        <td>{candidate.matchedSoftHypothesisIds.length === 0 ? "None" : <ul>{candidate.matchedSoftHypothesisIds.map((id) => {
+          const binding = result.constraintBindings.find((item) => item.hypothesisId === id)!;
+          const condition = request.directConstraints.find((item) => item.editorId === binding.editorId)!;
+          return <li key={id}>Condition {request.directConstraints.indexOf(condition) + 1}: <span className="secret-text">{describeDirectConstraint(condition)}</span> ({condition.confidence})</li>;
+        })}</ul>}</td>
       </tr>)}</tbody>
     </table></div>}
-    <p className="hint">Seed IDs belong only to this request. Path indices are zero-based. Equal candidate text from different paths stays separate. This manual-only model has no user-defined Hard/Soft constraints: Hard rejections and relative points are normally zero. Points are not success probabilities.</p>
+    <p className="hint">Seed and Core hypothesis IDs belong only to this request. Path indices are zero-based. Equal candidate text from different paths stays separate. Soft confidence contributes Low 1, Medium 2, or High 3 relative points per matched condition; points are not success probabilities and do not change generation order. Hard rejections are aggregate counts; individual reasons are unavailable.</p>
   </section>;
 }
 
@@ -74,12 +81,13 @@ export default function CandidatePreview() {
   const [affixBlank, setAffixBlank] = useState({ prefix: false, suffix: false });
   const [clearSequence, setClearSequence] = useState(0);
   const [pending, setPending] = useState(false);
-  const [result, setResult] = useState<PreviewResponse | null>(null);
+  const [result, setResult] = useState<{ response: PreviewResponse; request: ReturnType<typeof createPreviewRequest> } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inputRejection, setInputRejection] = useState<string | null>(null);
   const revision = useRef(0);
   const active = useRef<{ id: string; revision: number } | null>(null);
   const mounted = useRef(false);
+  const editorSequence = useRef(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const errors = validatePreviewInput(input);
   if (inputRejection) errors.push(inputRejection);
@@ -95,6 +103,11 @@ export default function CandidatePreview() {
     setDirty(true); setResult(null); setError(null); setInputRejection(message);
   }
   const seedGuard = useRawTextGuard<HTMLTextAreaElement>("seeds", input.seedText, (seedText) => edit({ seedText }), rejectInput);
+  function addConstraint() {
+    if (input.directConstraints.length >= PREVIEW_LIMITS.directConstraints || editorSequence.current >= 0xffff_ffff) return;
+    editorSequence.current += 1;
+    edit({ directConstraints: [...input.directConstraints, createDefaultDirectConstraint(editorSequence.current)] });
+  }
   function clear() {
     revision.current += 1;
     setInput(defaults()); setAffixBlank({ prefix: false, suffix: false }); setClearSequence((value) => value + 1); setDirty(false); setResult(null); setError(null); setInputRejection(null);
@@ -108,7 +121,7 @@ export default function CandidatePreview() {
     try {
       const response = await runCandidatePreview(request);
       if (response.requestId !== current.id) throw new PreviewError("INVALID_RESPONSE");
-      if (mounted.current && active.current?.id === current.id && revision.current === current.revision) setResult(response);
+      if (mounted.current && active.current?.id === current.id && revision.current === current.revision) setResult({ response, request });
     } catch (failure: unknown) {
       if (mounted.current && active.current?.id === current.id && revision.current === current.revision) setError(safePreviewError(failure));
     } finally {
@@ -118,7 +131,7 @@ export default function CandidatePreview() {
       }
     }
   }
-  const status = pending ? "Loading" : dirty && errors.length > 0 ? "Invalid" : error ? "Error" : result ? (result.candidates.length === 0 ? "Empty" : result.stop === "attemptLimit" || result.stop === "outputLimit" ? "Limited" : "Success") : "Idle";
+  const status = pending ? "Loading" : dirty && errors.length > 0 ? "Invalid" : error ? "Error" : result ? (result.response.candidates.length === 0 ? "Empty" : result.response.stop === "attemptLimit" || result.response.stop === "outputLimit" ? "Limited" : "Success") : "Idle";
   return <section className="preview" aria-labelledby="preview-title">
     <h2 id="preview-title">Candidate Preview</h2>
     <p>Enter manual seeds and preview a bounded set of candidates generated by Rust Core.</p>
@@ -128,6 +141,7 @@ export default function CandidatePreview() {
     <fieldset><legend>Case variants</legend>{CASE_OPTIONS.map((option) => <label className="check" key={option.value}><input type="checkbox" checked={input.caseVariants.includes(option.value)} onChange={(event) => edit({ caseVariants: event.target.checked ? [...input.caseVariants, option.value] : input.caseVariants.filter((value) => value !== option.value) })} />{option.label}</label>)}</fieldset>
     <div className="option-grid"><AffixOptions key={`prefix-${clearSequence}`} name="Prefix" onRejected={rejectInput} onChange={(prefixes, blank) => { setAffixBlank((current) => ({ ...current, prefix: blank })); edit({ prefixes }); }} /><AffixOptions key={`suffix-${clearSequence}`} name="Suffix" onRejected={rejectInput} onChange={(suffixes, blank) => { setAffixBlank((current) => ({ ...current, suffix: blank })); edit({ suffixes }); }} /></div>
     <p className="hint">Only selected case variants are used, in the order shown. Generation order: Seed → Case → Prefix → Suffix. Affixes keep their case. Results outside the 1–64-byte domain are skipped, never truncated.</p>
+    <DirectConstraintEditor constraints={input.directConstraints} onAdd={addConstraint} canAdd={editorSequence.current < 0xffff_ffff} onChange={(directConstraints) => edit({ directConstraints })} onRejected={rejectInput} />
     <div className="option-grid"><label>Attempt limit<input inputMode="numeric" value={input.attemptLimit} onChange={(event) => edit({ attemptLimit: event.target.value })} /><small>Default {PREVIEW_LIMITS.defaultAttempts}; maximum {PREVIEW_LIMITS.maxAttempts}.</small></label><label>Emission limit<input inputMode="numeric" value={input.emissionLimit} onChange={(event) => edit({ emissionLimit: event.target.value })} /><small>Default {PREVIEW_LIMITS.defaultEmissions}; maximum {PREVIEW_LIMITS.maxEmissions}.</small></label></div>
     {dirty && errors.length > 0 && <div role="alert"><ul>{errors.map((message) => <li key={message}>{message}</li>)}</ul></div>}
     <div className="actions"><button type="button" onClick={preview} disabled={pending || errors.length > 0}>{pending ? "Preview running…" : "Preview candidates"}</button><button type="button" className="secondary" onClick={clear}>Clear inputs and results</button></div>
@@ -135,9 +149,9 @@ export default function CandidatePreview() {
       <p>State: {status}</p>
       {pending && <p>Loading: Rust is processing the request. Edits and Clear discard obsolete results; they do not cancel generation. Wait for the request to finish before running another preview.</p>}
       {error && <p className="error">{error}</p>}
-      {result && <PreviewResult result={result} />}
+      {result && <PreviewResult result={result.response} request={result.request} />}
     </div>
     <p className="hint">One-shot local IPC: at most 16 KiB per request, 64 KiB per response, 100 candidate records, and one Rust preview at a time with no waiting queue. Attempts and emissions are independent limits. Interactive cancellation is unavailable.</p>
-    <p className="hint">Seeds and candidates are kept in memory for this view, without logging, automatic saving, clipboard copying, or external transmission. Clear reduces retained references; it does not guarantee secure memory erasure. Transport allocations precede the adapter's raw-body limit.</p>
+    <p className="hint">Seeds, conditions, and candidates are kept in memory for this view, without logging, automatic saving, clipboard copying, or external transmission. Clear reduces retained references; it does not guarantee secure memory erasure. Transport allocations precede the adapter's raw-body limit.</p>
   </section>;
 }

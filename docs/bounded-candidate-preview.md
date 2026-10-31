@@ -1,9 +1,11 @@
 # Bounded desktop candidate preview
 
-Issue [#12](https://github.com/cludewn/cluebench/issues/12) adds the first
-user-driven Desktop preview. The React interface accepts manual seeds and
-explicit case/prefix/suffix options. The existing UI-independent Rust Core
-performs generation; the frontend does not implement a generator or evaluator.
+The React interface accepts manual seeds, explicit case/prefix/suffix options,
+and up to 16 manually edited direct constraints. Issue
+[#14](https://github.com/cludewn/cluebench/issues/14) extends the original
+user-driven preview from Issue [#12](https://github.com/cludewn/cluebench/issues/12).
+The existing UI-independent Rust Core performs generation, Hard filtering,
+and Soft evaluation; the frontend does not implement a generator or evaluator.
 This is a bounded exploration of configured paths, not a password-space search,
 password verifier, or structural satisfiability analysis.
 
@@ -25,8 +27,12 @@ strip CR/LF. Validation of `onChange` values alone cannot detect the original
 forbidden line endings. The Preview screens text exposed by
 `paste.clipboardData`, `drop.dataTransfer`, and native `beforeinput.data` or
 `beforeinput.dataTransfer` before value sanitization. A lone CR in Seed transfer
-text, or any CR/LF in affix transfer text, rejects the entire insertion with a
-fixed message that contains no source text. Valid Seed LF/CRLF transfers use
+text, or forbidden controls in single-line constraint fields, rejects the entire
+insertion with a fixed message that contains no source text. Affix transfers
+reject CR/LF. Constraint literal, allowed-character, and numeric fields screen
+observable raw controls before single-line sanitization; numeric fields are
+text inputs with a numeric input-mode hint, not coercing number inputs.
+Valid Seed LF/CRLF transfers use
 the browser's default insertion; permitted CRLF-to-LF conversion preserves the
 seed meaning. Other domain/size errors remain the existing value validator's
 responsibility.
@@ -60,6 +66,47 @@ truncation. Traversal is Seed → Case → Prefix → Suffix, with suffix varyin
 fastest. Paths longer than the 64-byte candidate domain are counted as domain
 skips. Equal text from different paths remains separate records.
 
+## Direct constraints
+
+The initial condition list is empty, preserving the manual-seed workflow.
+Users explicitly add, edit, enable, disable, or remove rows, choose Hard or
+Soft applicability, and select Low, Medium, or High confidence. Disabled rows
+still count toward the 16-row limit. Each row remains distinct even when its
+values duplicate another row.
+
+| Type | Fields and inclusive bounds | Core meaning |
+| --- | --- | --- |
+| Length | `1 <= min <= max <= 64` | Candidate length is within the range. |
+| Position | `index` 1–64; `allowed` 1–95 printable ASCII bytes | The one-based position contains any character in `allowed`, not a substring or regular expression. |
+| Contains | `literal` 1–64 printable ASCII bytes | Contains the case-sensitive literal. |
+| NotContains | `literal` 1–64 printable ASCII bytes | Does not contain the case-sensitive literal. |
+| Prefix | `literal` 1–64 printable ASCII bytes | Starts with the case-sensitive literal. |
+| Suffix | `literal` 1–64 printable ASCII bytes | Ends with the case-sensitive literal. |
+| CharacterCount | `class`: lowercase, uppercase, digit, space, or symbol; `0 <= min <= max <= 64` | The number of characters in the class is within the range. Space is excluded from symbol. |
+
+Leading/trailing spaces and case are preserved. Repeated characters in
+`allowed` are permitted. Numeric drafts remain strings until strict whole-string
+integer validation; incomplete or invalid drafts are not trimmed, clamped,
+normalized, or replaced with a previous valid value. Every row must be valid
+before Preview, including disabled rows. A disabled invalid row must be corrected
+or removed. Contradictory but individually valid conditions are permitted.
+
+An enabled Hard condition filters candidates through the Core. Soft mismatches
+do not reject candidates; each matched enabled Soft hypothesis contributes
+its confidence weight: Low 1, Medium 2, High 3. Duplicate-valued Soft rows can
+both match and contribute separately. Hard confidence is retained but has no
+evaluation effect. Switching applicability preserves the chosen confidence.
+Relative points are not calibrated probabilities, and output is never sorted
+by points. Disabled conditions remain validated in the project but do not enter
+the resolved active scenario. The generator does not deliver Hard-rejected
+candidates or their individual rejection reasons to the preview consumer.
+
+The frontend owns stable, nonzero, monotonically allocated `u32` editor IDs.
+Rows use these IDs as React keys; edits and type changes preserve identity.
+Removal and Clear do not reset allocation or reuse IDs, and allocation stops
+before wraparound. A new duplicate-valued row receives a new ID. These are
+session-local editor identities, not a persistent project schema.
+
 ## Resource limits
 
 These inclusive Preview limits are defined in the Desktop adapter independently
@@ -77,6 +124,12 @@ Invalid values are rejected; no clamping occurs.
 | Prefixes / suffixes, each list without duplicates | 1–8 each |
 | Individual affix | 0–64 printable ASCII bytes |
 | Logical generation config | 1,043 bytes |
+| Direct constraints, including disabled rows | 0–16 |
+| Constraint literal | 1–64 printable ASCII bytes |
+| Position allowed characters | 1–95 printable ASCII bytes |
+| Combined constraint string payload | At most 1,520 bytes (16 × 95) |
+| Matched Soft hypothesis IDs per candidate | At most 16 |
+| Relative points per candidate | 0–48 |
 | Attempt allowance | Default 2,048; range 1–4,096 |
 | Emission allowance | Default 50; range 1–100 |
 | Returned candidate records | 100 |
@@ -85,9 +138,18 @@ Invalid values are rejected; no clamping occurs.
 
 Logical config bytes follow the Core contract: 16 bytes for two allowances,
 one byte per case, plus all affix bytes. Attempt and emission allowances are
-independent. Attempts bound work even when every path is a domain skip. A
-response over 64 KiB fails with a fixed error; candidates are never removed to
+independent. Attempts bound visited paths even when every path is a domain skip.
+The additional matching workload is bounded by 16 conditions and their bounded
+strings; an attempt allowance alone does not bound per-attempt evaluation cost.
+A response over 64 KiB fails with a fixed error; candidates are never removed to
 fit the response budget.
+
+JSON escaping can amplify string sizes, so logical byte limits do not replace
+the final encoded request and serialized response checks. Size estimates are
+not execution evidence or latency guarantees. DTO tests exercise synthetic
+escaping and workload boundaries; change-specific measured results belong in
+the implementation report and PR. The Raw limit does not bound prior
+WebView/Tauri allocations or Serde allocation metadata to the same size.
 
 ## Raw IPC and execution lifetime
 
@@ -122,20 +184,70 @@ the Core's configured emission limit stops delivery.
 
 ## DTO and provenance
 
-The camelCase request contains `requestId`, `seeds`, `options` (`caseVariants`,
-`prefixes`, `suffixes`), and `limits` (`attemptLimit`, `emissionLimit`). Unknown
-fields, unknown case variants, malformed JSON, invalid types, duplicate options,
-and out-of-range numbers are rejected with fixed non-sensitive error codes.
-There is no user-defined hypothesis or constraint input in this command.
+The canonical camelCase request contains `requestId`, `seeds`, `options`
+(`caseVariants`, `prefixes`, `suffixes`), `limits` (`attemptLimit`,
+`emissionLimit`), and `directConstraints`. The frontend always constructs this
+explicit shape. Each direct condition contains `editorId`, `enabled`,
+`applicability` (`hard` or `soft`), `confidence` (`low`, `medium`, or `high`),
+and one tagged `constraint` object:
+
+```ts
+type Constraint =
+  | { type: "length"; min: number; max: number }
+  | { type: "position"; index: number; allowed: string }
+  | { type: "contains" | "notContains" | "prefix" | "suffix"; literal: string }
+  | {
+      type: "characterCount";
+      class: "lowercase" | "uppercase" | "digit" | "space" | "symbol";
+      min: number;
+      max: number;
+    };
+```
+
+Rust independently validates all rows, including disabled ones, before Core
+construction. Editor IDs must be nonzero unique `u32` values. Omitted
+`directConstraints` defaults to `[]`; explicit `null` is invalid. The existing
+limit defaults apply to omitted fields within `limits`. Other fields are
+required. Unknown fields/variants, duplicate JSON fields, malformed JSON,
+invalid scalar types/ranges, and duplicate generation options are rejected
+with fixed non-sensitive error codes. Direct Serde deserialization preserves
+duplicate-field rejection; it does not pass through `serde_json::Value` first.
+The frontend's canonical object/string representation is not a claim that
+derived Serde DTOs reject every equivalent positional or enum representation.
+
+For `N` seeds and zero-based condition index `i`, the adapter assigns seed IDs
+`1..=N`, hypothesis ID `N + 2*i + 1`, and constraint-effect ID `N + 2*i + 2`.
+The maximum entity ID is 96. Each condition becomes one manual-origin
+hypothesis, independent activation carrying its enabled state, its chosen
+applicability/confidence, and exactly one constraint effect. Disabled hypotheses
+remain present for `RawProject::validate()` before `resolve()` excludes them.
+Duplicate-valued rows receive distinct Core IDs. No placeholder clue or
+alternative group is created, and the request accepts no client-supplied Core IDs.
 
 The response contains `requestId`, `effectiveLimits`, `candidates`, `stats`,
-`potentialPaths`, and `stop`. During each borrowed Core callback, the adapter
-copies only candidate text, seed identity, the generation path, selected
-affixes, and relative points into owned DTOs. Seed IDs come from `record.seed()`;
+`potentialPaths`, `stop`, and `constraintBindings`, an array of
+`{ editorId, hypothesisId }` for all submitted rows, including disabled ones.
+During each borrowed Core callback, the adapter copies candidate text, seed
+identity, generation path, selected affixes, relative points, and
+`matchedSoftHypothesisIds` into owned DTOs. Seed IDs come from `record.seed()`;
 paths come from `record.path()`; affixes come from the referenced config; points
-come from the actual evaluation. Seed IDs are nonzero positions assigned for
-this request only, never persistent project IDs. No clue or hypothesis origin
-is invented. React keys identify paths rather than candidate text alone.
+and Soft match IDs come from the actual Core evaluation. Core IDs are assigned
+for this request only, never persistent project IDs. React keys identify paths
+rather than candidate text alone.
+
+The frontend checks the response shape, request identity, serialized byte bound,
+seed/path/case/affix provenance, counter/termination consistency, exact submitted
+editor-to-hypothesis bindings, and bounded unique Soft match IDs. Referenced IDs
+must resolve through the validated bindings to enabled Soft rows in the
+submitted request snapshot. Points must be integers in 0–48 and equal the sum
+of those rows' confidence weights: Low 1, Medium 2, High 3. No matched IDs means
+zero points, including when there are no active Soft conditions. Distinct
+hypotheses with duplicate-valued conditions contribute independently.
+This arithmetic consistency check does not evaluate candidate text or prove
+that the Core actually matched the candidate correctly. The Rust Core remains
+authoritative for constraint matching and Soft evaluation. Each displayed
+result retains the request's condition snapshot to explain matches; later
+draft edits or reordered rows cannot reinterpret it.
 
 ## Statistics and termination
 
@@ -151,10 +263,9 @@ and `outputLimit` mean the corresponding Core allowance stopped work. Exhausting
 the final path can return `completed` even when an allowance is reached exactly.
 The frontend does not derive a stop from the candidate count. `cancelled` and
 `consumerStopped` are Core concepts, but this one-shot consumer does not request
-either and the UI does not manufacture them. Zero candidates never means
-Unsatisfiable. This manual-only model has no user Hard/Soft constraints, so
-Hard rejections and relative points are normally zero. Points are not success
-probabilities.
+either and the UI does not manufacture them. Hard rejections and relative points
+can be nonzero. Zero candidates, including an all-Hard-rejected preview, never
+means Unsatisfiable. Points are not success probabilities.
 
 ## Frontend state and privacy
 
@@ -165,15 +276,21 @@ revision and invalidates displayed results. Each run has a non-sensitive request
 ID and captures its input revision. Only a still-current request/revision may
 publish success or error. Unmount cleanup prevents late state updates. Request
 ownership also prevents an old `finally` from clearing another run's Loading.
+Adding, editing, removing, enabling/disabling, changing type, switching
+applicability, and changing confidence all invalidate results and advance the
+revision. Editing during Loading is permitted, without automatic regeneration.
+Changing a type resets its fields' transient raw-input guard state.
 
-Clear removes displayed input/results and invalidates their revision. It does
+Clear removes displayed input/results and the condition list, retaining the
+editor ID allocation counter, and invalidates their revision. It does
 not cancel Rust, resolve an IPC Promise, or release the worker slot. While that
 Promise is pending, the UI continues to report work in progress and disables
 another run. Busy failures have a fixed, actionable message. No Cancel button
 is provided.
 
-Seeds/candidates cross only required local IPC. No content logging, console
-logging, telemetry, persistence, URL parameters, network requests, automatic
+Seeds, condition literals, and candidates cross only required local IPC. No
+content logging, console logging, telemetry, persistence, URL parameters,
+network requests, automatic
 clipboard use, or automatic file output is added. Spellcheck/autocorrection are
 disabled on sensitive inputs, and candidates render as React text nodes.
 Arbitrary IPC/Serde/Join diagnostics never become UI messages. Clear reduces
@@ -209,7 +326,7 @@ not current CI status. Do not rewrite these records or update this specification
 solely to reflect a later CI success. New change-specific results belong in the
 PR by default, rather than a new verification report for every issue.
 
-Clue/Hypothesis/Constraint editors, alternative selection, persistence,
+The full Clue/Hypothesis workspace, alternative selection, persistence,
 structure canvas, exports, interactive cancellation, streaming/jobs, advanced
 ranking, deduplication, recursive transforms, CLI/HTTP APIs, runtime AI, remote
 authentication, release packaging, and signing remain separate work. The

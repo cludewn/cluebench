@@ -116,6 +116,12 @@ label { display: block; font-weight: 600; }
 textarea, input:not([type="checkbox"]) { display: block; width: 100%; box-sizing: border-box; margin: 6px 0; padding: 9px; font: inherit; border: 1px solid #8292a1; border-radius: 4px; color: inherit; background: white; }
 textarea, .secret-text { font-family: ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 textarea { resize: vertical; }
+select { display: block; width: 100%; box-sizing: border-box; margin: 6px 0; padding: 9px; font: inherit; border: 1px solid #8292a1; border-radius: 4px; color: inherit; background: white; }
+.constraint-settings, .constraint-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; align-items: start; }
+.constraint-fields .hint { grid-column: 1 / -1; }
+.constraint-settings .check { align-self: center; }
+.constraint-row { border-left: 3px solid #8292a1; }
+.direct-constraints h3 { font-size: 1.1rem; margin-bottom: 8px; }
 fieldset { margin: 16px 0; padding: 16px; border: 1px solid #d4dce3; min-width: 0; }
 legend { font-weight: 600; }
 .check { display: inline-flex; align-items: center; gap: 7px; margin-right: 20px; font-weight: 400; }
@@ -137,4 +143,4 @@ th { white-space: nowrap; }
 .stats { max-width: 560px; }
 summary { cursor: pointer; font-weight: 600; }
 .connection p:first-of-type { margin-top: 12px; }
-@media (max-width: 650px) { main { padding: 24px 12px; } .preview { padding: 16px; } .option-grid { grid-template-columns: 1fr; gap: 0; } }
+@media (max-width: 650px) { main { padding: 24px 12px; } .preview { padding: 16px; } .option-grid, .constraint-settings, .constraint-fields { grid-template-columns: 1fr; gap: 0; } }

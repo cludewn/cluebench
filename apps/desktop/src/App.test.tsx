@@ -20,8 +20,8 @@ const seedBox = () => screen.getByRole("textbox", { name: "Manual seeds — one 
 const enter = (text = "Synthetic1!") => fireEvent.change(seedBox(), { target: { value: text } });
 const status = () => screen.getByRole("status", { name: "Preview status" });
 function result(req: PreviewRequest): PreviewResponse {
-  return { requestId: req.requestId, effectiveLimits: req.limits,
-    candidates: [{ text: req.seeds[0], seedId: 1, path: { seedIndex: 0, caseIndex: 0, caseVariant: req.options.caseVariants[0], prefixIndex: 0, suffixIndex: 0 }, prefix: req.options.prefixes[0], suffix: req.options.suffixes[0], relativePoints: 0 }],
+  return { requestId: req.requestId, effectiveLimits: req.limits, constraintBindings: req.directConstraints.map((row, index) => ({ editorId: row.editorId, hypothesisId: req.seeds.length + 2 * index + 1 })),
+    candidates: [{ text: req.seeds[0], seedId: 1, path: { seedIndex: 0, caseIndex: 0, caseVariant: req.options.caseVariants[0], prefixIndex: 0, suffixIndex: 0 }, prefix: req.options.prefixes[0], suffix: req.options.suffixes[0], relativePoints: 0, matchedSoftHypothesisIds: [] }],
     stats: { attemptedPaths: 1, domainSkips: 0, hardRejections: 0, emittedCandidates: 1 }, potentialPaths: 1, stop: "completed" };
 }
 function hold() {
@@ -168,7 +168,92 @@ describe("Candidate Preview desktop workflow (mock IPC)", () => {
     vi.mocked(runCandidatePreview).mockRejectedValue(new PreviewError("DESKTOP_UNAVAILABLE"));
     render(<App />); enter(); fireEvent.click(start()); await screen.findByText(/Desktop connection unavailable/); expect(start().disabled).toBe(false);
   });
+  it("serializes distinct duplicate conditions, retains confidence, and never reuses removed or cleared IDs", async () => {
+    vi.mocked(runCandidatePreview).mockImplementation(async (req) => result(req));
+    render(<App />); enter();
+    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove condition 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+    fireEvent.change(screen.getByLabelText("Condition 1 confidence"), { target: { value: "high" } });
+    fireEvent.change(screen.getByLabelText("Condition 1 applicability"), { target: { value: "soft" } });
+    fireEvent.change(screen.getByLabelText("Condition 1 applicability"), { target: { value: "hard" } });
+    fireEvent.click(start()); await screen.findByText(/Success: preview/);
+    expect(activeRequest().directConstraints.map((row) => row.editorId)).toEqual([1, 3, 4]);
+    expect(activeRequest().directConstraints[0]).toMatchObject({ confidence: "high", applicability: "hard", constraint: { type: "length", min: 1, max: 64 } });
+    expect(activeRequest().directConstraints[1].constraint).toEqual(activeRequest().directConstraints[2].constraint);
+    fireEvent.click(screen.getByRole("button", { name: "Clear inputs and results" })); enter();
+    fireEvent.click(screen.getByRole("button", { name: "Add condition" })); fireEvent.click(start()); await screen.findByText(/Success: preview/);
+    expect(activeRequest().directConstraints[0].editorId).toBe(5);
+  });
+  it("blocks invalid disabled rows until corrected or removed, without automatic generation", () => {
+    render(<App />); enter(); fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+    fireEvent.change(screen.getByLabelText("Condition 1 minimum"), { target: { value: "" } });
+    fireEvent.click(screen.getByLabelText("Enable condition 1"));
+    expect(start().disabled).toBe(true); expect(status().textContent).toContain("State: Invalid");
+    expect(screen.getByRole("alert").textContent).toContain("whole-number bounds");
+    fireEvent.change(screen.getByLabelText("Condition 1 minimum"), { target: { value: "1" } });
+    expect(start().disabled).toBe(false); expect(runCandidatePreview).not.toHaveBeenCalled();
+  });
+  it("displays submitted Soft provenance and Core points in generation order", async () => {
+    vi.mocked(runCandidatePreview).mockImplementation(async (req) => {
+      const res = result(req); res.candidates[0].relativePoints = 3;
+      res.candidates[0].matchedSoftHypothesisIds = [req.seeds.length + 1];
+      return res;
+    });
+    render(<App />); enter("Synthetic1!"); fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+    fireEvent.change(screen.getByLabelText("Condition 1 type"), { target: { value: "contains" } });
+    fireEvent.change(screen.getByLabelText("Condition 1 literal"), { target: { value: "Synthetic" } });
+    fireEvent.change(screen.getByLabelText("Condition 1 applicability"), { target: { value: "soft" } });
+    fireEvent.change(screen.getByLabelText("Condition 1 confidence"), { target: { value: "high" } });
+    fireEvent.click(start()); await screen.findByText(/Success: preview/);
+    expect(within(screen.getByRole("table")).getByText("Contains: “Synthetic”")).toBeTruthy();
+    expect(within(screen.getByRole("table")).getByText("3")).toBeTruthy();
+    const submitted = activeRequest();
+    fireEvent.change(screen.getByLabelText("Condition 1 literal"), { target: { value: "changed" } });
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(submitted.directConstraints[0].constraint).toEqual({ type: "contains", literal: "Synthetic" });
+  });
+  it.each(["add", "edit", "remove", "enable", "type", "applicability", "confidence"] as const)("invalidates results after condition action: %s", async (action) => {
+    vi.mocked(runCandidatePreview).mockImplementation(async (req) => result(req));
+    render(<App />); enter(); fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+    fireEvent.click(start()); await screen.findByText(/Success: preview/);
+    editCondition(action);
+    expect(screen.queryByRole("table")).toBeNull(); expect(runCandidatePreview).toHaveBeenCalledTimes(1);
+  });
+  it.each(["success", "error"] as const)("discards stale %s after condition edits and waits for settlement before retry", async (outcome) => {
+    const pending = hold(); render(<App />); enter(); fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+    fireEvent.click(start()); const req = activeRequest();
+    editCondition("applicability"); editCondition("confidence");
+    expect(status().textContent).toContain("State: Loading"); expect(runCandidatePreview).toHaveBeenCalledTimes(1);
+    await act(async () => { if (outcome === "success") pending.resolve(result(req)); else pending.reject(new Error("private constraint")); });
+    expect(screen.queryByRole("table")).toBeNull(); expect(status().textContent).toContain("State: Idle");
+    expect(status().textContent).not.toContain("private constraint"); expect(start().disabled).toBe(false);
+    vi.mocked(runCandidatePreview).mockImplementation(async (next) => result(next));
+    fireEvent.click(start()); await screen.findByText(/Success: preview/);
+    expect(activeRequest().directConstraints[0]).toMatchObject({ applicability: "soft", confidence: "high" });
+  });
+  it("clears conditions while pending, then reruns with new editor identity after settlement", async () => {
+    const pending = hold(); render(<App />); enter(); fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+    fireEvent.click(start()); const req = activeRequest();
+    fireEvent.click(screen.getByRole("button", { name: "Clear inputs and results" }));
+    expect(screen.queryByLabelText("Condition 1 type")).toBeNull(); enter();
+    fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+    expect(status().textContent).toContain("State: Loading");
+    await act(async () => pending.resolve(result(req)));
+    expect(screen.queryByRole("table")).toBeNull();
+    vi.mocked(runCandidatePreview).mockImplementation(async (next) => result(next));
+    fireEvent.click(start()); await screen.findByText(/Success: preview/);
+    expect(activeRequest().directConstraints[0].editorId).toBe(2);
+  });
 });
+
+function editCondition(action: "add" | "edit" | "remove" | "enable" | "type" | "applicability" | "confidence") {
+  if (action === "add") fireEvent.click(screen.getByRole("button", { name: "Add condition" }));
+  else if (action === "remove") fireEvent.click(screen.getByRole("button", { name: "Remove condition 1" }));
+  else if (action === "enable") fireEvent.click(screen.getByLabelText("Enable condition 1"));
+  else if (action === "edit") fireEvent.change(screen.getByLabelText("Condition 1 minimum"), { target: { value: "2" } });
+  else fireEvent.change(screen.getByLabelText(`Condition 1 ${action}`), { target: { value: action === "type" ? "contains" : action === "applicability" ? "soft" : "high" } });
+}
 
 describe("Auxiliary Core probe", () => {
   it("holds Loading, then displays actual response and permits retry", async () => {

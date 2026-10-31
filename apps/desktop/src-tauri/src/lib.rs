@@ -106,11 +106,28 @@ mod tests {
         let payload = serde_json::json!({
             "requestId":"acl-preview-1", "seeds":["Synthetic1!"],
             "options":{"caseVariants":["asciiLowercase"],"prefixes":[""],"suffixes":[""]},
-            "limits":{"attemptLimit":2048,"emissionLimit":50}
+            "limits":{"attemptLimit":2048,"emissionLimit":50},
+            "directConstraints":[
+                {"editorId":41,"enabled":true,"applicability":"hard","confidence":"low",
+                 "constraint":{"type":"prefix","literal":"synthetic"}},
+                {"editorId":42,"enabled":true,"applicability":"soft","confidence":"high",
+                 "constraint":{"type":"suffix","literal":"!"}}
+            ]
         });
         let raw = || ipc::InvokeBody::Raw(serde_json::to_vec(&payload).unwrap());
         let result = invoke(&main, local, "candidate_preview", raw()).unwrap();
         assert_eq!(result["candidates"][0]["text"], "synthetic1!");
+        assert_eq!(result["candidates"][0]["relativePoints"], 3);
+        assert_eq!(
+            result["candidates"][0]["matchedSoftHypothesisIds"],
+            serde_json::json!([4])
+        );
+        assert_eq!(
+            result["constraintBindings"],
+            serde_json::json!([
+                {"editorId":41,"hypothesisId":2}, {"editorId":42,"hypothesisId":4}
+            ])
+        );
         assert_eq!(result["stop"], "completed");
         assert!(invoke(&other, local, "candidate_preview", raw()).is_err());
         assert!(invoke(&main, "https://example.invalid", "candidate_preview", raw()).is_err());

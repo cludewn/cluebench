@@ -4,9 +4,11 @@ The first Cluebench desktop shell uses Tauri 2 with a React/TypeScript SPA built
 by Vite. Tauri connects the existing Rust Core directly to the webview in the
 same native process. It avoids introducing a server or a second Core process and
 keeps the domain implementation reusable outside the UI. This is an application
-foundation, not the completed MVP. Recorded execution results and remaining
-checks are in [Issue #12 verification](candidate-preview-verification.md);
-[Issue #9 verification](desktop-verification.md) preserves the earlier shell record.
+foundation, not the completed MVP. [Issue #12 verification](candidate-preview-verification.md)
+and [Issue #9 verification](desktop-verification.md) preserve historical local
+evidence, not current CI status. Change-specific verification belongs in the
+implementation report and PR; inspect the target commit's GitHub Actions jobs
+for CI outcomes.
 
 ## Architecture and layout
 
@@ -15,7 +17,11 @@ React / TypeScript -> Tauri IPC -> Desktop Rust adapter -> cluebench-core
 
 apps/desktop/
   src/App.tsx                 Candidate Preview and auxiliary Core probe
-  src/preview-input.ts        Seed grammar, input bounds, request construction
+  src/CandidatePreview.tsx    Input/revision ownership and request snapshots
+  src/direct-constraints.ts  Typed constraint drafts, validation, DTO conversion
+  src/DirectConstraintEditor.tsx  Controlled direct-condition rows
+  src/use-raw-text-guard.ts   Observable raw-text normalization protection
+  src/preview-input.ts        Seed/constraint input bounds, request construction
   src/preview-bridge.ts       Raw request encoding, response checks, safe errors
   src/core-bridge.ts          Auxiliary probe bridge and safe errors
   src-tauri/src/preview.rs    Bounded worker, DTOs, Core generation, single-flight
@@ -210,11 +216,24 @@ Core output.
 
 Candidate Preview is the primary screen. It accepts ordered manual seed lines,
 explicit case transformations and prefix/suffix lists, and independent attempt
-and emission limits. The [Preview contract](bounded-candidate-preview.md)
+and emission limits. Up to 16 direct conditions can be added, edited, enabled,
+disabled, or removed. Supported types are Length, Position, Contains,
+NotContains, Prefix, Suffix, and CharacterCount. Each condition maps to one
+independent manual-origin Core hypothesis with one constraint effect. Hard
+conditions filter; matched Soft conditions contribute Low/Medium/High relative
+weights of 1/2/3, without changing generation order. Points are not probabilities.
+Disabled rows have no active evaluation effect but still require valid values
+before Preview and count toward the limit. No condition matching is performed
+in TypeScript.
+
+The [Preview contract](bounded-candidate-preview.md)
 defines the exact input grammar, all resource limits, DTOs, one-shot Raw IPC,
 blocking worker and single-flight ownership, request/revision handling, safe
-errors, statistics/stop semantics, and privacy limitations. No interactive
-cancellation or export is provided.
+errors, statistics/stop semantics, and privacy limitations. The request includes
+`directConstraints`; the response adds editor-to-hypothesis `constraintBindings`
+and each candidate's Core-provided `matchedSoftHypothesisIds`. Match explanations
+use the submitted snapshot, never later draft values. No interactive cancellation
+or export is provided.
 
 The auxiliary custom command, `core_probe`, takes no frontend input. It constructs a
 fixed synthetic `RawProject` containing one enabled, manual-origin Hard
@@ -228,7 +247,9 @@ Only the resulting `hard_eligible` booleans cross IPC:
 ```
 
 The candidate strings, hypotheses, constraints, seeds, and full domain model
-remain inside Rust. Validation/evaluation failures become the fixed codes
+for this fixed probe remain inside Rust. Preview separately transfers its
+bounded user-authored input and candidate response through local IPC.
+Validation/evaluation failures in the probe become the fixed codes
 `CORE_VALIDATION_FAILED` and `CORE_EVALUATION_FAILED`. The command has no
 production `unwrap()`/`expect()` path or domain debug logging.
 
@@ -242,8 +263,10 @@ The auxiliary probe displays both booleans with independent connection states.
 The primary Preview distinguishes Idle, Invalid, Loading, Success, Empty,
 Limited, and Error. Empty/Limited may coexist; Core termination is shown
 separately. Editing or Clear invalidates results while the outstanding request
-continues to hold Loading until its Promise settles. The footer identifies
-remaining editors, persistence, and export as unavailable.
+continues to hold Loading until its Promise settles. This includes every direct
+condition action and rejected observable raw input. Clear also resets the
+condition list, without reusing editor IDs. The full Clue/Hypothesis workspace,
+persistence, and export remain unavailable.
 
 ## Command ACL, CSP, and privacy
 
@@ -271,9 +294,10 @@ application content. See [Tauri CSP](https://v2.tauri.app/security/csp/).
 
 No Tauri plugins, filesystem/shell/network commands, telemetry, analytics,
 authentication, updater, or secret-bearing logs are added. Tests use only
-synthetic fixtures. Preview input/results exist in memory and local IPC only;
-Clear does not promise secure erasure. Raw IPC limits application DTO parsing,
-not prior WebView/transport allocations or a compromised renderer. Rust tests exercise the generated ACL with Tauri's mock runtime:
+synthetic fixtures. Preview seeds, constraints, and results exist in memory and
+local IPC only; Clear does not promise secure erasure. Raw IPC limits application
+DTO parsing, not prior WebView/transport allocations or a compromised renderer.
+Rust tests exercise the generated ACL with Tauri's mock runtime:
 the real handler/Core result is allowed for local `main`, denied for another
 window, and denied for an external origin. That test is distinct from a native
 webview smoke test.
@@ -296,24 +320,46 @@ when those environments are available:
    Enter an internal empty seed line and confirm a fixed line-number error.
    Restore input and verify retry. Set emission 1 to inspect OutputLimit;
    use a 64-byte seed plus a nonempty prefix to inspect domain skips.
-4. Clear while a controlled request is pending when testing lifecycle behavior:
+4. Clear, enter seeds `aB`, `AB`, and `12`, select only Original and the two
+   no-affix options. Add an enabled Hard Contains condition with literal `B`.
+   Add an enabled Soft Prefix condition with literal `a` and High confidence.
+   Preview must emit `aB` then `AB`, with attempted 3, Hard rejected 1, emitted 2,
+   and Completed. `aB` has 3 relative points and identifies the Soft Prefix row
+   as matched; `AB` has 0 points and no Soft matches. Confirm literal case and
+   request-snapshot provenance. Disable the Hard row and rerun: all three seeds
+   are emitted, and the Soft score still does not reorder them.
+5. Reenable the Hard row and change its literal to `Z`. Preview is Empty with
+   attempted 3, Hard rejected 3, emitted 0, and Completed, without an
+   Unsatisfiable claim. Restore literal `B`, set attempt limit 1, and rerun:
+   the first record is delivered with AttemptLimit and Limited. Restore limits,
+   remove or disable conditions, Clear, enter a valid seed, and verify a new
+   successful Preview with no conditions. Confirm invalid disabled rows block
+   Preview until corrected or removed.
+6. Where the native clipboard/drop path can safely preserve synthetic source
+   text, try an invalid control-bearing insertion in a new constraint literal,
+   Position allowed-character field, and numeric text field. Confirm a fixed
+   rejection, preserved previous value, and invalidated results, then correct
+   the field and rerun. Record exactly which native transfer/beforeinput paths
+   were exercised; a jsdom test does not establish native behavior.
+7. Clear while a controlled request is pending when testing lifecycle behavior:
    Clear invalidates display, but is not cancellation. The normal bounded run
    may finish too quickly to observe Loading; focused frontend tests deliberately
    hold Promises pending for these transitions.
-5. Build with `pnpm -C apps/desktop tauri build --no-bundle --ci -- --locked`.
+8. Build with `pnpm -C apps/desktop tauri build --no-bundle --ci -- --locked`.
    Stop Vite, launch `./target/release/cluebench-desktop` on Linux or
    `.\target\release\cluebench-desktop.exe` on Windows, and repeat the checks.
    This verifies bundled assets, production CSP and real Raw IPC separately.
-6. Run `pnpm -C apps/desktop dev` alone in a browser and submit valid input.
+9. Run `pnpm -C apps/desktop dev` alone in a browser and submit valid input.
    Confirm Desktop unavailable, safe retry, and no fabricated candidates.
-7. Optionally run the auxiliary Core connection probe. Close the native window
+10. Optionally run the auxiliary Core connection probe. Close the native window
    normally and confirm clean process exit.
 
 Controlled frontend tests cover rejected invocations and recovery without adding
 a privileged debug command to the product. Do not report a browser render,
 mock-runtime ACL test, or compile as a native GUI/IPC success. Record frontend
 build, Core tests, Linux build, Windows build, GUI startup, real IPC, and GitHub
-Actions separately in the verification report.
+Actions separately in the implementation report and relevant PR. Historical
+verification records remain unchanged.
 
 ## CI and remaining scope
 
@@ -332,7 +378,7 @@ is not a measured runtime guarantee. CI runs after push and does not currently
 automate a native GUI smoke test. Local workflow editing does not establish a
 GitHub Actions PASS.
 
-The Desktop does not implement Clue/Hypothesis/Constraint editors, alternative
+The Desktop does not implement the full Clue/Hypothesis workspace, alternative
 selection, structure canvas, export, persistence/migration/encryption, general
 generation jobs, streaming, interactive cancellation, routing/global state/i18n
 frameworks, final branding, installers, signing, updates, release automation,
