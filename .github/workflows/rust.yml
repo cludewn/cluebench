@@ -54,7 +54,6 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm -C apps/desktop test
       - name: Build assets for Rust workspace checks
-        if: runner.os == 'Linux'
         run: pnpm -C apps/desktop build
       - name: Run Clippy
         if: runner.os == 'Linux'
@@ -65,5 +64,8 @@ jobs:
       - name: Test the independent Rust Core
         if: runner.os == 'Linux'
         run: cargo test -p cluebench-core --locked
+      - name: Test encrypted project persistence on Windows
+        if: runner.os == 'Windows'
+        run: cargo test -p cluebench-desktop --locked project
       - name: Build the native desktop application without installers
         run: pnpm -C apps/desktop tauri build --no-bundle --ci -- --locked

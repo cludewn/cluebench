@@ -5,9 +5,13 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Enrollment makes custom commands subject to capability checks, rather
     // than leaving invoke_handler commands callable from every window.
-    let attributes = tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&["core_probe", "candidate_preview"]),
-    );
+    let attributes =
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+            "core_probe",
+            "candidate_preview",
+            "project_open",
+            "project_save",
+        ]));
     tauri_build::try_build(attributes)?;
     Ok(())
 }

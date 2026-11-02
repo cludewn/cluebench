@@ -381,18 +381,21 @@ stable affix row IDs remain required. No
 automatic Preview is added.
 
 Clue evidence, interpretations, constraint literals, Seeds, and candidates are
-sensitive and remain in memory and required local IPC. There is no content
-logging, telemetry, persistence, external request, URL payload, automatic
-clipboard operation, or file export. Inputs disable spellcheck/autocorrection;
+sensitive. Preview keeps request snapshots/results in memory and required local IPC.
+Explicit [project persistence](project-files.md) separately saves authoring data
+with age encryption, including drafts that fail Preview validation; results are
+never persisted. There is no content logging, telemetry, external request, URL
+payload, automatic clipboard operation, or file export. Inputs disable spellcheck/autocorrection;
 output uses React text nodes. Raw Serde/Core/Join errors are never shown. New
 sensitive DTOs do not unconditionally derive `Debug`; Core `Debug` output is
 also treated as sensitive. Clear reduces references without secure-erasure or
 zeroization guarantees.
 
-The existing generated command ACL remains local-`main` only, with no new command
-or permission. Other windows and remote origins are denied. Production CSP is
-unchanged; no new origin, plugin, shell/filesystem/network grant, or development
-exception is introduced. Raw IPC checks do not protect a compromised renderer
+The generated command ACL remains local-`main` only. Project persistence adds
+individual permissions for `project_open` and `project_save`, with Rust-only native
+dialogs and opaque file tokens. Other windows and remote origins are denied.
+Production CSP is unchanged; no new origin, generic filesystem, shell, or network
+grant is introduced. Raw IPC checks do not protect a compromised renderer
 or prevent allocations made before Rust receives the body.
 
 ## Verification and remaining scope
@@ -411,8 +414,23 @@ Their results and unexecuted checks describe their creation time, not current
 CI status. Do not rewrite them or create an Issue-specific report by default.
 
 The complete Project Workspace, cross-Clue grouping, automatic exclusivity,
-logical OR, batch scenario comparison, Hypothesis-owned Seed effects, persistence/migration/encryption,
+logical OR, batch scenario comparison, Hypothesis-owned Seed effects, automatic schema migration,
 structure analysis UI, canvas, export, interactive cancellation, streaming/jobs,
 advanced ranking, deduplication, recursive transforms, CLI/HTTP APIs, stable
 external Rust API, runtime AI, remote authentication, release packaging, and
 signing remain separate work. Issue #11's glib investigation is unchanged.
+
+## Project replacement
+
+The [project-file contract](project-files.md) owns authoring snapshots, UUIDs,
+dirty baselines, file bindings, and resource budgets independently of Preview.
+Open invalidates Preview revisions/results and replaces only the form subtree.
+The worker owner, active request, request sequence, and common editor allocator
+remain mounted; pending continues until the original Promise settles. Old form
+callbacks cannot edit the replacement project. Affix rows are parent-controlled,
+including empty/duplicate rows and includeEmpty, and share the editor allocator.
+Preview arrays and blank-row feedback are derived from this authoring state.
+Eight rows plus includeEmpty may save successfully while exceeding Preview
+options. Generation limits use the raw-input/IME guard. Save during composition
+is rejected without discarding the composition. Clear retains the file binding
+and is an authoring edit; it still does not cancel a Rust worker.

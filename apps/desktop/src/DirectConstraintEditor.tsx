@@ -48,13 +48,13 @@ export function ConstraintFields({ constraint: value, label, onChange, onRejecte
           onChange={(event) => onChange({ ...value, class: event.target.value as CharacterClass })}>
           {CHARACTER_CLASSES.map((characterClass) => <option value={characterClass} key={characterClass}>{characterClass}</option>)}
         </select></label>}
-        {field("minimum", value.min, (min) => onChange({ ...value, min }), true)}
-        {field("maximum", value.max, (max) => onChange({ ...value, max }), true)}
+        {field("minimum", value.min, (min) => onChange({ ...value, min }), true, 256)}
+        {field("maximum", value.max, (max) => onChange({ ...value, max }), true, 256)}
         <p className="hint">Inclusive whole-number range: {value.type === "length" ? "1" : "0"} ≤ min ≤ max ≤ 64.{value.type === "characterCount" && " Space is separate from symbol."}</p>
       </>;
     case "position":
       return <>
-        {field("position", value.index, (index) => onChange({ ...value, index }), true)}
+        {field("position", value.index, (index) => onChange({ ...value, index }), true, 256)}
         {field("allowed characters", value.allowed, (allowed) => onChange({ ...value, allowed }), false, 95)}
         <p className="hint">One-based position, 1–64. Allowed characters are alternatives (1–95 printable ASCII bytes), not a substring or regular expression. Duplicates are permitted.</p>
       </>;

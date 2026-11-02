@@ -6,13 +6,21 @@
 
 mod preview;
 mod probe;
+mod project;
+mod project_crypto;
+mod project_document;
+mod project_fs;
 
 pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(preview::PreviewState::default())
+        .manage(project::ProjectState::default())
         .invoke_handler(tauri::generate_handler![
             probe::core_probe,
-            preview::candidate_preview
+            preview::candidate_preview,
+            project::project_open,
+            project::project_save
         ])
         .run(tauri::generate_context!())
 }
