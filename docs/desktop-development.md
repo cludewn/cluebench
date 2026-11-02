@@ -20,8 +20,8 @@ apps/desktop/
   src/CandidatePreview.tsx    Input/revision ownership and request snapshots
   src/direct-constraints.ts  Typed constraint drafts, validation, DTO conversion
   src/DirectConstraintEditor.tsx  Direct rows and shared constraint fields
-  src/clue-hypotheses.ts      Clue/Hypothesis/effect drafts and validation
-  src/ClueHypothesisEditor.tsx  Original evidence and interpretation editing
+  src/clue-hypotheses.ts      Drafts, group transitions, and reference validation
+  src/ClueHypothesisEditor.tsx  Evidence, interpretations, and group selection
   src/use-raw-text-guard.ts   Raw-text/IME guards and accepted-value restoration
   src/unicode-text.ts         Unicode scalar and UTF-8 evidence validation
   src/preview-input.ts        Shared input bounds and request construction
@@ -238,20 +238,33 @@ explicit case transformations and prefix/suffix lists, and independent attempt
 and emission limits. Up to 16 Direct Constraints preserve the independent
 manual-origin workflow. Up to 8 Clues store separate original text and source,
 and up to 8 Clue-backed Hypotheses reference them. Several Hypotheses can share
-one Clue. Each has an interpretation, enabled state, Hard/Soft applicability,
+one Clue. Each has an interpretation, Independent/Grouped activation, Hard/Soft applicability,
 confidence, and 0–4 effects, with at most 16 Clue-backed effects in total.
 The editor reuses the seven existing constraint fields: Length, Position,
 Contains, NotContains, Prefix, Suffix, and CharacterCount.
 
-Every enabled Hard effect must match. An enabled Soft Hypothesis with effects
+Every active Hard effect must match. An active Soft Hypothesis with effects
 contributes Low/Medium/High relative points of 1/2/3 once only when all its
 effects match. Zero effects neither filter nor score; removing the final effect
-retains its Hypothesis. Disabled records remain subject to full validation.
+retains its Hypothesis. Disabled and unselected records remain subject to full validation.
 Points are not probabilities and do not change generation order. TypeScript
 validates authoring and response consistency without matching candidate text.
-A Clue with any referring Hypothesis, including disabled, incomplete, or
-zero-effect drafts, cannot be deleted until those references are removed or
-explicitly reassigned. No automatic deletion or origin replacement occurs.
+Up to 8 Alternative Groups anchor to individual Clues and accept only same-Clue
+Hypotheses. A group is initially empty with explicit None selection. Radio
+selection chooses one member or None; only the selected member is active.
+Independent Hypotheses use enabled. Groups store no member arrays. Membership
+is stored on each Hypothesis. Joining and leaving set enabled to false; moving
+clears only a selected source member and never changes the destination selection.
+Deleting a selected member returns selection to None; removing the last member
+keeps an empty group. Deleting a group retains its members, effects, content,
+and identities as Independent and disabled. Grouped origins cannot change until
+explicit Ungroup. This is exclusive scenario selection, not logical OR,
+automatic inference, or enumeration of all combinations.
+
+A Clue with any referring Hypothesis or group anchor, including disabled,
+incomplete, zero-effect drafts, and empty groups, cannot be deleted until those
+references are removed or independent origins explicitly reassigned. No
+automatic deletion or origin replacement occurs.
 
 Evidence text areas preserve accepted Unicode scalar text, LF, TAB, empty
 strings, surrounding whitespace, combining characters, and Emoji within byte
@@ -267,17 +280,29 @@ this is not byte-exact clipboard or file preservation.
 The [Preview contract](bounded-candidate-preview.md) defines exact input grammar,
 resource limits, DTOs, one-shot Raw IPC, single-flight worker ownership,
 request/revision handling, fixed errors, and privacy limitations. Requests retain
-`directConstraints` and add `clues` and `hypotheses`, including typed `effects`.
+`directConstraints`, `clues`, and `hypotheses`, including typed `effects`, and
+add `groups`. A group has `editorId`, `clueEditorId`, and required
+`selectedHypothesisEditorId` (explicit null means None). Omitted groups default
+to []; null is invalid. A Hypothesis optionally has `groupEditorId`; when present
+it must be a nonzero u32 and requires enabled=false. Null membership is invalid.
+Strict direct Serde parsing rejects duplicate/unknown fields and invalid
+references, including wrong kinds, cross-Clue members, and nonmember selection.
 Responses retain `constraintBindings` and add `hypothesisBindings` for every
-Clue-backed Hypothesis, including disabled and zero-effect ones. Shared
+Clue-backed Hypothesis, including inactive and zero-effect ones. Shared
 `matchedSoftHypothesisIds` trace through validated bindings and the submitted
-request snapshot to interpretations and original Clue text/source. Later draft
-values never reinterpret a response.
+request snapshot to interpretations and original Clue text/source. Snapshots
+retain groups, membership, selections, all evidence/effects, Direct Constraints,
+Seeds, options, and limits. The result shows the evaluated selection. Frontend
+Soft-match and active-Hard checks use submitted selection for grouped activation,
+with exact confidence-point arithmetic and complete binding validation, without
+matching candidate strings. Later draft values never reinterpret a response.
 
 A single monotonically increasing nonzero `u32` editor allocator spans Direct
-Constraints, Clues, Hypotheses, and effects without reuse after deletion or Clear.
+Constraints, Clues, Hypotheses, effects, and groups without reuse after deletion or Clear.
 Rust separately assigns request-local Core IDs in Seed, Direct Hypothesis/effect,
-Clue, then Clue-backed Hypothesis/effects order, with a maximum ID of 128. Both
+Clue, Clue-backed Hypothesis/effects, then group order, with a maximum ID of 136.
+Editor-to-Core group and Hypothesis maps are independent; no client Core IDs are
+accepted. Groups are allocated last to retain prior Hypothesis binding order. Both
 Raw and canonical typed requests are checked against 16,384 bytes; the whole
 input shares that budget in addition to individual caps. Canonical counting
 also covers shorter equivalent representations accepted by direct Serde parsing.
@@ -314,10 +339,15 @@ The primary Preview distinguishes Idle, Invalid, Loading, Success, Empty,
 Limited, and Error. Empty/Limited may coexist; Core termination is shown
 separately. Editing or Clear invalidates results while the outstanding request
 continues to hold Loading until its Promise settles. This includes all Clue,
-Hypothesis, origin, effect, and Direct Constraint edits and rejected observable
-raw input. Clear empties those lists without reusing editor IDs or cancelling
-Rust. A complete Project Workspace, AlternativeGroups, persistence, and export
-remain unavailable.
+Hypothesis, origin, effect, group creation/deletion, membership, selection/None,
+and Direct Constraint edits and rejected observable raw input. Atomic pure
+helpers update groups and membership together in one revision; A→B→A changes
+cannot revive an older response. Group cards do not reparent Hypothesis cards:
+flat editor-ID keys preserve composing input nodes. Clear empties all lists
+including groups, remounts SeedInput, and retains editor/request sequences and
+active worker ownership. Guard cleanup, unstarted composition-end rejection,
+and affix stable row IDs preserve IME lifecycle. Clear does not cancel Rust.
+A complete Project Workspace, persistence, and export remain unavailable.
 
 ## Command ACL, CSP, and privacy
 
@@ -415,13 +445,30 @@ when those environments are available:
    IME composition, observable CR/CRLF paste/drop/beforeinput rejection, and
    noncancelable restoration where native facilities permit. Record actual
    paths exercised without inferring them from jsdom tests.
-10. Build with `pnpm -C apps/desktop tauri build --no-bundle --ci -- --locked`.
+10. Clear, enter `A` and `BB` as Seeds, and add one Clue with two Hard
+    Hypotheses: Length 1–1 and Length 2–2. Create a group anchored to that
+    Clue; it begins empty with None. Join both Hypotheses using their membership
+    selectors. Confirm the enabled controls disappear, origins are locked, and
+    interpretations/effects remain. Select the first member: Preview emits `A`;
+    select the second: it emits `BB`; select None: it emits both. The result's
+    evaluated selection must match each submission. Change a member to Soft
+    with two matching effects and confirm its weight is added once only when
+    selected. Combine it with independent and Direct conditions. Move a selected
+    member to a second same-Clue group: the source becomes None and the
+    destination retains its selection. Ungroup, remove a selected member, and
+    delete a populated group; verify no implicit activation or replacement.
+    Keep an empty group and confirm it still blocks Clue deletion. During IME
+    composition, change membership/selection and confirm input-node identity
+    and draft text survive. Clear and rerun seed-only Preview. Controlled
+    pending A→B→A/stale success/error tests belong in the frontend suite when
+    the bounded native run finishes too quickly to observe them.
+11. Build with `pnpm -C apps/desktop tauri build --no-bundle --ci -- --locked`.
    Stop Vite, launch `./target/release/cluebench-desktop` on Linux or
    `.\target\release\cluebench-desktop.exe` on Windows, and repeat the checks.
    This verifies bundled assets, production CSP and real Raw IPC separately.
-11. Run `pnpm -C apps/desktop dev` alone in a browser and submit valid input.
+12. Run `pnpm -C apps/desktop dev` alone in a browser and submit valid input.
    Confirm Desktop unavailable, safe retry, and no fabricated candidates.
-12. Optionally run the auxiliary Core connection probe. Close the native window
+13. Optionally run the auxiliary Core connection probe. Close the native window
    normally and confirm clean process exit.
 
 Controlled frontend tests cover rejected invocations and recovery without adding
@@ -448,8 +495,9 @@ is not a measured runtime guarantee. CI runs after push and does not currently
 automate a native GUI smoke test. Local workflow editing does not establish a
 GitHub Actions PASS.
 
-The Desktop does not implement a complete Project Workspace, AlternativeGroup
-editing or exclusive selection, Hypothesis-owned Seed effects, structural
+The Desktop does not implement a complete Project Workspace, cross-Clue grouping,
+logical OR, automatic exclusivity inference, batch scenario comparison,
+Hypothesis-owned Seed effects, structural
 analysis UI, structure canvas, export, persistence/migration/encryption, general
 generation jobs, streaming, interactive cancellation, routing/global state/i18n
 frameworks, final branding, installers, signing, updates, release automation,

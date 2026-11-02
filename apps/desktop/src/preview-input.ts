@@ -5,7 +5,7 @@
 import { serializeDirectConstraints, validateDirectConstraints } from "./direct-constraints";
 import type { DirectConstraint, DirectConstraintDraft } from "./direct-constraints";
 import { serializeClueHypotheses, validateClueHypotheses } from "./clue-hypotheses";
-import type { Clue, ClueDraft, Hypothesis, HypothesisDraft } from "./clue-hypotheses";
+import type { AlternativeGroup, AlternativeGroupDraft, Clue, ClueDraft, Hypothesis, HypothesisDraft } from "./clue-hypotheses";
 
 export const PREVIEW_LIMITS = {
   requestBytes: 16 * 1024,
@@ -23,6 +23,9 @@ export const PREVIEW_LIMITS = {
   maxEmissions: 100,
   responseBytes: 64 * 1024,
   directConstraints: 16,
+  groups: 8,
+  memberships: 8,
+  coreEntities: 136,
   constraintLiteralBytes: 64,
   allowedBytes: 95,
 } as const;
@@ -41,6 +44,7 @@ export interface PreviewRequest {
   directConstraints: DirectConstraint[];
   clues: Clue[];
   hypotheses: Hypothesis[];
+  groups: AlternativeGroup[];
 }
 export interface PreviewInput {
   seedText: string;
@@ -52,6 +56,7 @@ export interface PreviewInput {
   directConstraints: DirectConstraintDraft[];
   clues: ClueDraft[];
   hypotheses: HypothesisDraft[];
+  groups?: AlternativeGroupDraft[];
 }
 
 const encoder = new TextEncoder();
@@ -106,7 +111,7 @@ export function validatePreviewInput(input: PreviewInput, requestId = "preview-1
       errors.push(`${name} must be an integer from 1 to ${max.toLocaleString("en-US")}.`);
     }
   }
-  errors.push(...validateDirectConstraints(input.directConstraints), ...validateClueHypotheses(input.clues, input.hypotheses, input.directConstraints));
+  errors.push(...validateDirectConstraints(input.directConstraints), ...validateClueHypotheses(input.clues, input.hypotheses, input.directConstraints, input.groups));
   if (checkRequestBudget && errors.length === 0 && utf8Bytes(JSON.stringify(createPreviewRequest(input, requestId))) > PREVIEW_LIMITS.requestBytes) {
     errors.push("The preview request exceeds 16 KiB. Reduce the input.");
   }
@@ -124,6 +129,6 @@ export function createPreviewRequest(input: PreviewInput, requestId: string): Pr
     },
     limits: { attemptLimit: Number(input.attemptLimit), emissionLimit: Number(input.emissionLimit) },
     directConstraints: serializeDirectConstraints(input.directConstraints),
-    ...serializeClueHypotheses(input.clues, input.hypotheses),
+    ...serializeClueHypotheses(input.clues, input.hypotheses, input.groups),
   };
 }

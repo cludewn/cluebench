@@ -6,7 +6,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { PREVIEW_LIMITS, isPrintableAscii, utf8Bytes, validatePreviewInput } from "./preview-input";
 import type { CaseVariant, PreviewRequest } from "./preview-input";
 import { canonicalDirectConstraints } from "./direct-constraints";
-import { canonicalClueHypotheses, clueHypothesesToDrafts } from "./clue-hypotheses";
+import { canonicalClueHypotheses, clueHypothesesToDrafts, isHypothesisActive } from "./clue-hypotheses";
 
 export const PREVIEW_COMMAND = "candidate_preview";
 export type GenerationStop = "completed" | "attemptLimit" | "outputLimit" | "cancelled" | "consumerStopped";
@@ -63,7 +63,7 @@ function hasConsistentSoftPoints(ids: unknown, points: unknown, softWeights: Rea
     new Set(ids).size !== ids.length) return false;
   let expectedPoints = 0;
   for (const id of ids) {
-    if (!integer(id, 1, 128)) return false;
+    if (!integer(id, 1, PREVIEW_LIMITS.coreEntities)) return false;
     const weight = softWeights.get(id);
     if (weight === undefined) return false;
     expectedPoints += weight;
@@ -73,10 +73,10 @@ function hasConsistentSoftPoints(ids: unknown, points: unknown, softWeights: Rea
 
 export function encodePreviewRequest(request: PreviewRequest): Uint8Array {
   let directConstraints: PreviewRequest["directConstraints"];
-  let evidence: Pick<PreviewRequest, "clues" | "hypotheses">;
+  let evidence: Pick<PreviewRequest, "clues" | "hypotheses" | "groups">;
   try {
     directConstraints = canonicalDirectConstraints(request.directConstraints);
-    evidence = canonicalClueHypotheses(request.clues, request.hypotheses);
+    evidence = canonicalClueHypotheses(request.clues, request.hypotheses, request.groups);
     if (typeof request.requestId !== "string" || !/^[A-Za-z0-9_-]{1,32}$/.test(request.requestId) ||
       typeof request.limits.attemptLimit !== "number" || typeof request.limits.emissionLimit !== "number" ||
       validatePreviewInput({
@@ -87,7 +87,7 @@ export function encodePreviewRequest(request: PreviewRequest): Uint8Array {
         directConstraints: directConstraints.map((row) => ({ ...row, constraint:
           "min" in row.constraint ? { ...row.constraint, min: String(row.constraint.min), max: String(row.constraint.max) } :
           "index" in row.constraint ? { ...row.constraint, index: String(row.constraint.index) } : { ...row.constraint } })),
-        ...clueHypothesesToDrafts(evidence.clues, evidence.hypotheses),
+        ...clueHypothesesToDrafts(evidence.clues, evidence.hypotheses, evidence.groups),
       }, request.requestId, false).length > 0 ||
       request.seeds.some((seed) => seed.length === 0 || /[\r\n]/.test(seed))) {
       throw new PreviewError("PREVIEW_INVALID_REQUEST");
@@ -110,7 +110,7 @@ export function isPreviewResponse(value: unknown, request: PreviewRequest): valu
     value.effectiveLimits.emissionLimit !== request.limits.emissionLimit || !Array.isArray(value.candidates) || value.candidates.length > 100 ||
     !fields(value.stats, ["attemptedPaths", "domainSkips", "hardRejections", "emittedCandidates"]) ||
     !Object.values(value.stats).every((count) => integer(count, 0, request.limits.attemptLimit)) ||
-    (![...request.directConstraints, ...request.hypotheses.filter((row) => row.effects.length > 0)].some((row) => row.enabled && row.applicability === "hard") && value.stats.hardRejections !== 0) || value.stats.emittedCandidates !== value.candidates.length ||
+    (!(request.directConstraints.some((row) => row.enabled && row.applicability === "hard") || request.hypotheses.some((row) => isHypothesisActive(row, request.groups) && row.applicability === "hard" && row.effects.length > 0)) && value.stats.hardRejections !== 0) || value.stats.emittedCandidates !== value.candidates.length ||
     value.candidates.length > request.limits.emissionLimit ||
     value.stats.attemptedPaths !== (value.stats.domainSkips as number) + (value.stats.hardRejections as number) + (value.stats.emittedCandidates as number) ||
     !integer(value.potentialPaths, 0, 12288) || (value.stats.attemptedPaths as number) > value.potentialPaths ||
@@ -131,20 +131,20 @@ export function isPreviewResponse(value: unknown, request: PreviewRequest): valu
     expectedHypotheses.set(hypothesis.editorId, nextCoreId);
     nextCoreId += 1 + hypothesis.effects.length;
   }
-  if (nextCoreId - 1 > 128) return false;
+  if (nextCoreId - 1 + request.groups.length > PREVIEW_LIMITS.coreEntities) return false;
   function bindingsValid(bindings: unknown, expected: ReadonlyMap<number, number>, submitted: readonly {
-    editorId: number; enabled: boolean; applicability: "hard" | "soft"; confidence: keyof typeof confidenceWeights;
+    editorId: number; enabled: boolean; groupEditorId?: number; applicability: "hard" | "soft"; confidence: keyof typeof confidenceWeights;
   }[], isClueBacked: boolean): boolean {
     if (!Array.isArray(bindings) || bindings.length !== expected.size) return false;
     const seen = new Set<number>();
     for (const binding of bindings) {
       if (!fields(binding, ["editorId", "hypothesisId"]) || !integer(binding.editorId, 1, 0xffff_ffff) ||
-        !integer(binding.hypothesisId, 1, 128) || expected.get(binding.editorId) !== binding.hypothesisId ||
+        !integer(binding.hypothesisId, 1, PREVIEW_LIMITS.coreEntities) || expected.get(binding.editorId) !== binding.hypothesisId ||
         seen.has(binding.editorId) || allCoreIds.has(binding.hypothesisId)) return false;
       seen.add(binding.editorId); allCoreIds.add(binding.hypothesisId);
       const row = submitted.find((item) => item.editorId === binding.editorId)!;
       const hasEffects = !isClueBacked || request.hypotheses.find((item) => item.editorId === binding.editorId)!.effects.length > 0;
-      if (row.enabled && row.applicability === "soft" && hasEffects) softWeights.set(binding.hypothesisId, confidenceWeights[row.confidence]);
+      if ((isClueBacked ? isHypothesisActive(row, request.groups) : row.enabled) && row.applicability === "soft" && hasEffects) softWeights.set(binding.hypothesisId, confidenceWeights[row.confidence]);
     }
     return true;
   }

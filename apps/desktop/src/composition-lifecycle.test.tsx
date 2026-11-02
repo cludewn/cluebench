@@ -203,4 +203,31 @@ describe("Composition lifetime and canonical Preview payloads", () => {
     expect(requests().map((request) => request.seeds)).toEqual([["accepted"], ["fresh"]]);
     expect(requests()[1].requestId).not.toBe(submitted.requestId);
   });
+  it.each(["interpretation", "effect", "clue", "seed", "affix"] as const)("preserves the composing %s DOM node through Group creation, membership, selection, movement and deletion", async (kind) => {
+    render(<CandidatePreview />); change(seedName, "seed"); click("Add Clue"); click("Add hypothesis for clue 1"); click("Add effect to hypothesis 1");
+    click("Add prefix"); change("Prefix 1", "prefix");
+    const name = kind === "interpretation" ? "Hypothesis 1 interpretation" : kind === "effect" ? "Hypothesis 1 effect 1 minimum" : kind === "clue" ? "Clue 1 original text" : kind === "seed" ? seedName : "Prefix 1";
+    const composing = field(name), completed = kind === "effect" ? "2" : kind === "interpretation" || kind === "clue" ? "合成 🧩" : "completed";
+    fireEvent.compositionStart(composing); change(name, completed);
+    click("Add group for clue 1"); click("Add group for clue 1");
+    const membership = () => screen.getByLabelText("Hypothesis 1 group");
+    fireEvent.change(membership(), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Group 4 select hypothesis 1" }));
+    fireEvent.change(membership(), { target: { value: "5" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Group 5 select hypothesis 1" }));
+    click("Remove group 5");
+    expect(field(name)).toBe(composing); expect(composing.value).toBe(completed);
+    expect(start().disabled).toBe(true); expect(requests()).toEqual([]);
+    fireEvent.compositionEnd(composing); click("Preview candidates"); await screen.findByText(/Success: preview results received/);
+    const submitted = requests()[0];
+    expect(submitted.groups).toEqual([{ editorId: 4, clueEditorId: 1, selectedHypothesisEditorId: null }]);
+    expect(submitted.hypotheses[0]).toMatchObject({ editorId: 2, enabled: false, effects: [{ editorId: 3 }] });
+    expect(submitted.hypotheses[0].groupEditorId).toBeUndefined();
+    if (kind === "interpretation") expect(submitted.hypotheses[0].interpretation).toBe(completed);
+    else if (kind === "effect") expect(submitted.hypotheses[0].effects[0].constraint).toMatchObject({ min: 2 });
+    else if (kind === "clue") expect(submitted.clues[0].text).toBe(completed);
+    else if (kind === "seed") expect(submitted.seeds).toEqual([completed]);
+    else expect(submitted.options.prefixes).toEqual(["", completed]);
+  });
+
 });

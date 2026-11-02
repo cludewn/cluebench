@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { PREVIEW_COMMAND, PreviewError, encodePreviewRequest, isPreviewResponse, runCandidatePreview, safePreviewError } from "./preview-bridge";
-import { createDefaultHypothesis } from "./clue-hypotheses";
+import { createDefaultGroup, createDefaultHypothesis } from "./clue-hypotheses";
 import { createDefaultDirectConstraint } from "./direct-constraints";
 import type { DirectConstraint } from "./direct-constraints";
 import type { PreviewResponse } from "./preview-bridge";
@@ -13,7 +13,7 @@ import { createPreviewRequest } from "./preview-input";
 import type { PreviewInput, PreviewRequest } from "./preview-input";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: vi.fn() }));
 beforeEach(() => { vi.mocked(isTauri).mockReturnValue(true); });
-export const request = (): PreviewRequest => ({ clues: [], hypotheses: [], directConstraints: [], requestId: "p1", seeds: ["A"], options: { caseVariants: ["original"], prefixes: [""], suffixes: [""] }, limits: { attemptLimit: 2048, emissionLimit: 50 } });
+export const request = (): PreviewRequest => ({ clues: [], hypotheses: [], groups: [], directConstraints: [], requestId: "p1", seeds: ["A"], options: { caseVariants: ["original"], prefixes: [""], suffixes: [""] }, limits: { attemptLimit: 2048, emissionLimit: 50 } });
 export const response = (): PreviewResponse => ({ hypothesisBindings: [], constraintBindings: [], requestId: "p1", effectiveLimits: { attemptLimit: 2048, emissionLimit: 50 }, candidates: [{ text: "A", seedId: 1, path: { seedIndex: 0, caseIndex: 0, caseVariant: "original", prefixIndex: 0, suffixIndex: 0 }, prefix: "", suffix: "", relativePoints: 0, matchedSoftHypothesisIds: [] }], stats: { attemptedPaths: 1, domainSkips: 0, hardRejections: 0, emittedCandidates: 1 }, potentialPaths: 1, stop: "completed" });
 
 describe("Preview raw IPC bridge", () => {
@@ -124,7 +124,7 @@ describe("Direct condition request and response provenance", () => {
     req.limits = { attemptLimit: 4096, emissionLimit: 100 };
     req.directConstraints = Array.from({ length: 16 }, (_, i) => condition(0xffff_ffff - i, { enabled: false, applicability: "hard", confidence: "medium", constraint: { type: "position", index: 64, allowed: '"'.repeat(95) } }));
     const payload = encodePreviewRequest(req);
-    expect(payload.byteLength).toBe(16050);
+    expect(payload.byteLength).toBe(16062);
     expect(payload.byteLength).toBeLessThanOrEqual(16384);
     expect(JSON.parse(new TextDecoder().decode(payload)).directConstraints).toEqual(req.directConstraints);
   });
@@ -368,6 +368,10 @@ function exactBudgetRequest(bytes: number): PreviewRequest {
   req.hypotheses = Array.from({ length: 4 }, (_, i) => ({ ...createDefaultHypothesis(18 + i, 17), applicability: "soft", confidence: "high",
     effects: Array.from({ length: 4 }, (_, j) => ({ editorId: 30 + i * 4 + j, constraint: { type: "position", index: 1, allowed: '"'.repeat(95) } })),
   }));
+  req.groups = Array.from({ length: 8 }, (_, i) => createDefaultGroup(1000 + i, 17));
+  req.hypotheses[0].groupEditorId = 1000;
+  req.hypotheses[0].enabled = false;
+  req.groups[0].selectedHypothesisEditorId = req.hypotheses[0].editorId;
   const extraEscapes = bytes - new TextEncoder().encode(JSON.stringify(req)).byteLength;
   expect(extraEscapes).toBeGreaterThan(0); expect(extraEscapes).toBeLessThan(4096);
   req.seeds = req.seeds.map((seed, i) => '"'.repeat(Math.max(0, Math.min(64, extraEscapes - i * 64))) + seed.slice(Math.max(0, Math.min(64, extraEscapes - i * 64))));
@@ -376,12 +380,133 @@ function exactBudgetRequest(bytes: number): PreviewRequest {
 }
 
 describe("Shared canonical request budget", () => {
-  it("measures actual JSON escaping at exactly 16,384 and rejects 16,385 bytes without trimming", () => {
+  it("measures group-containing JSON at 16,383/16,384 and rejects 16,385 bytes without trimming", () => {
+    expect(encodePreviewRequest(exactBudgetRequest(16383)).byteLength).toBe(16383);
     const exact = exactBudgetRequest(16384);
     expect(encodePreviewRequest(exact).byteLength).toBe(16384);
     const oversized = exactBudgetRequest(16385);
     const before = JSON.stringify(oversized);
     expect(() => encodePreviewRequest(oversized)).toThrowError(new PreviewError("PREVIEW_REQUEST_TOO_LARGE"));
     expect(JSON.stringify(oversized)).toBe(before);
+  });
+});
+
+describe("Submitted exclusive scenario validation", () => {
+  function grouped() {
+    const state = clueBacked();
+    state.req.groups = [{ ...createDefaultGroup(200, 100), selectedHypothesisEditorId: 101 }, createDefaultGroup(201, 100)];
+    state.req.hypotheses[0].enabled = false; state.req.hypotheses[0].groupEditorId = 200;
+    state.req.hypotheses[1].groupEditorId = 200;
+    return state;
+  }
+  it("accepts selected Soft once, excludes an unselected member and preserves independent Soft", () => {
+    const { req, res } = grouped();
+    expect(JSON.parse(new TextDecoder().decode(encodePreviewRequest(req)))).toEqual(req);
+    expect(isPreviewResponse(res, req)).toBe(true);
+    req.groups[0].selectedHypothesisEditorId = 104;
+    expect(isPreviewResponse(res, req)).toBe(false);
+    // The selected zero-effect member adds no points; independent direct matches remain valid.
+    res.candidates[0].matchedSoftHypothesisIds = [2]; res.candidates[0].relativePoints = 3;
+    expect(isPreviewResponse(res, req)).toBe(true);
+    req.groups[0].selectedHypothesisEditorId = null;
+    expect(isPreviewResponse(res, req)).toBe(true);
+    res.candidates[0].matchedSoftHypothesisIds = [2, 12]; res.candidates[0].relativePoints = 5;
+    expect(isPreviewResponse(res, req)).toBe(false);
+  });
+  it("recognizes selected Grouped Hard despite enabled=false, and rejects Hard counters for None/unselected/zero-effect", () => {
+    const { req, res } = grouped();
+    req.directConstraints.forEach((row) => { row.enabled = false; });
+    req.hypotheses[0].applicability = "hard";
+    res.candidates = []; res.stats.emittedCandidates = 0; res.stats.hardRejections = 1;
+    expect(isPreviewResponse(res, req)).toBe(true);
+    req.groups[0].selectedHypothesisEditorId = null;
+    expect(isPreviewResponse(res, req)).toBe(false);
+    req.groups[0].selectedHypothesisEditorId = 104;
+    expect(isPreviewResponse(res, req)).toBe(false);
+    req.groups[0].selectedHypothesisEditorId = 101;
+    req.hypotheses[0].effects = [];
+    res.hypothesisBindings = [{ editorId: 101, hypothesisId: 9 }, { editorId: 104, hypothesisId: 10 }, { editorId: 105, hypothesisId: 11 }];
+    expect(isPreviewResponse(res, req)).toBe(false);
+  });
+  it("supports multiple selected groups and independent applicability without duplicating multi-effect points", () => {
+    const { req, res } = grouped();
+    req.hypotheses[2].enabled = false; req.hypotheses[2].groupEditorId = 201;
+    req.hypotheses[2].confidence = "low";
+    req.hypotheses[2].effects = [{ editorId: 106, constraint: { type: "length", min: 1, max: 64 } }];
+    req.groups[1].selectedHypothesisEditorId = 105;
+    res.candidates[0].matchedSoftHypothesisIds = [2, 9, 13]; res.candidates[0].relativePoints = 6;
+    expect(isPreviewResponse(res, req)).toBe(true);
+    res.candidates[0].relativePoints = 8;
+    expect(isPreviewResponse(res, req)).toBe(false);
+    req.groups[1].selectedHypothesisEditorId = null;
+    res.candidates[0].relativePoints = 6;
+    expect(isPreviewResponse(res, req)).toBe(false);
+  });
+  it("keeps exact submitted selection, memberships and evidence after draft mutations during Raw IPC", async () => {
+    const input: PreviewInput = { seedText: "A", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", directConstraints: [],
+      clues: [{ editorId: 1, text: "synthetic evidence", source: "synthetic source" }], groups: [{ editorId: 5, clueEditorId: 1, selectedHypothesisEditorId: 2 }],
+      hypotheses: [{ ...createDefaultHypothesis(2, 1), enabled: false, groupEditorId: 5, interpretation: "submitted", applicability: "soft", confidence: "high", effects: [{ editorId: 3, constraint: { type: "contains", literal: "A" } }] }],
+    };
+    const submitted = createPreviewRequest(input, "p1");
+    const res = response(); res.hypothesisBindings = [{ editorId: 2, hypothesisId: 3 }];
+    res.candidates[0].matchedSoftHypothesisIds = [3]; res.candidates[0].relativePoints = 3;
+    let finish!: (value: PreviewResponse) => void;
+    vi.mocked(invoke).mockReturnValueOnce(new Promise<PreviewResponse>((resolve) => { finish = resolve; }));
+    const pending = runCandidatePreview(submitted);
+    input.groups![0].selectedHypothesisEditorId = null;
+    delete input.hypotheses[0].groupEditorId;
+    input.hypotheses[0].interpretation = "changed";
+    input.clues[0].text = "changed";
+    expect(submitted.groups[0].selectedHypothesisEditorId).toBe(2);
+    expect(submitted.hypotheses[0]).toMatchObject({ groupEditorId: 5, interpretation: "submitted" });
+    expect(submitted.clues[0].text).toBe("synthetic evidence");
+    finish(res);
+    await expect(pending).resolves.toEqual(res);
+    expect(isPreviewResponse(res, createPreviewRequest(input, "p1"))).toBe(false);
+  });
+  it("rejects malformed groups and grouped enabled=true before invoking, without repairing the request", () => {
+    for (const mutate of [
+      (req: PreviewRequest) => { req.groups = null as never; },
+      (req: PreviewRequest) => { delete (req.groups[0] as Partial<PreviewRequest["groups"][number]>).selectedHypothesisEditorId; },
+      (req: PreviewRequest) => { req.groups[0].selectedHypothesisEditorId = 105; },
+      (req: PreviewRequest) => { req.groups[0].clueEditorId = 101; },
+      (req: PreviewRequest) => { req.groups[0].editorId = 7; },
+      (req: PreviewRequest) => { req.hypotheses[0].enabled = true; },
+      (req: PreviewRequest) => { req.hypotheses[0].groupEditorId = null as never; },
+      (req: PreviewRequest) => { req.hypotheses[0].groupEditorId = 0; },
+      (req: PreviewRequest) => { req.groups.push(...Array.from({ length: 7 }, (_, i) => createDefaultGroup(300 + i, 100))); },
+    ]) {
+      const { req } = grouped(); mutate(req);
+      const before = JSON.stringify(req);
+      expect(() => encodePreviewRequest(req)).toThrowError(new PreviewError("PREVIEW_INVALID_REQUEST"));
+      expect(JSON.stringify(req)).toBe(before);
+    }
+  });
+  it("appends eight groups through Core entity 136 without shifting bindings, and recomputes bindings when seeds change", () => {
+    const req = request(); req.seeds = Array(64).fill("A"); req.limits.emissionLimit = 100;
+    req.directConstraints = Array.from({ length: 16 }, (_, i) => condition(i + 1));
+    req.clues = Array.from({ length: 8 }, (_, i) => ({ editorId: 17 + i, text: "", source: "" }));
+    req.hypotheses = Array.from({ length: 8 }, (_, i) => ({ ...createDefaultHypothesis(25 + i, 17 + i), applicability: "soft", confidence: "high", effects: [
+      { editorId: 33 + i * 2, constraint: { type: "length", min: 1, max: 64 } }, { editorId: 34 + i * 2, constraint: { type: "length", min: 1, max: 64 } },
+    ] }));
+    const res = response(); res.effectiveLimits = { ...req.limits }; res.potentialPaths = 64;
+    res.stats = { attemptedPaths: 64, emittedCandidates: 64, domainSkips: 0, hardRejections: 0 };
+    res.constraintBindings = req.directConstraints.map((row, i) => ({ editorId: row.editorId, hypothesisId: 65 + i * 2 }));
+    res.hypothesisBindings = req.hypotheses.map((row, i) => ({ editorId: row.editorId, hypothesisId: 105 + i * 3 }));
+    res.candidates = Array.from({ length: 64 }, (_, i) => ({ ...response().candidates[0], seedId: i + 1, path: { ...response().candidates[0].path, seedIndex: i },
+      matchedSoftHypothesisIds: [...res.constraintBindings, ...res.hypothesisBindings].map((binding) => binding.hypothesisId), relativePoints: 72,
+    }));
+    expect(isPreviewResponse(res, req)).toBe(true);
+    req.groups = req.clues.map((row, i) => createDefaultGroup(49 + i, row.editorId));
+    expect(encodePreviewRequest(req).byteLength).toBeLessThan(16384);
+    expect(isPreviewResponse(res, req)).toBe(true);
+    req.hypotheses.forEach((row, i) => { row.groupEditorId = req.groups[i].editorId; row.enabled = false; req.groups[i].selectedHypothesisEditorId = row.editorId; });
+    expect(isPreviewResponse(res, req)).toBe(true);
+    // Manual Seed removal shifts every following Core binding by one, with groups still allocated last.
+    req.seeds.pop(); res.potentialPaths = res.stats.attemptedPaths = res.stats.emittedCandidates = 63; res.candidates.pop();
+    expect(isPreviewResponse(res, req)).toBe(false);
+    [...res.constraintBindings, ...res.hypothesisBindings].forEach((binding) => { binding.hypothesisId -= 1; });
+    res.candidates.forEach((candidate) => { candidate.matchedSoftHypothesisIds = candidate.matchedSoftHypothesisIds.map((id) => id - 1); });
+    expect(isPreviewResponse(res, req)).toBe(true);
   });
 });

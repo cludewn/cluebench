@@ -318,3 +318,123 @@ describe("Unicode evidence event guards (React/jsdom)", () => {
     fireEvent.compositionStart(text("Clue 1 original text")); click("Clear inputs and results"); seed(); expect(start().disabled).toBe(false);
   });
 });
+
+describe("Alternative Group editing and submitted scenarios", () => {
+  const select = (group: number, hypothesis: number | null) => fireEvent.click(screen.getByRole("radio", { name: `Group ${group} select ${hypothesis === null ? "None" : `hypothesis ${hypothesis}`}` }));
+  const selected = (group: number, hypothesis: number | null) => (screen.getByRole("radio", { name: `Group ${group} select ${hypothesis === null ? "None" : `hypothesis ${hypothesis}`}` }) as HTMLInputElement).checked;
+  const groupOf = (hypothesis: number, group: number | null) => change(`Hypothesis ${hypothesis} group`, group === null ? "independent" : String(group));
+
+  it("protects an empty Group's anchor, enforces eight Groups, and preserves stable Group names after deletion", async () => {
+    vi.mocked(runCandidatePreview).mockImplementation(async (req) => response(req));
+    render(<App />); seed(); addClue();
+    for (let i = 0; i < 8; i++) click("Add group for clue 1");
+    expect(button("Add group for clue 1").disabled).toBe(true);
+    expect(button("Remove clue 1").disabled).toBe(true);
+    expect(screen.getAllByText("Empty group: None is the only selection.")).toHaveLength(8);
+    click("Remove group 2");
+    expect(button("Remove group 3")).toBeTruthy();
+    click("Add group for clue 1");
+    expect(button("Remove group 10")).toBeTruthy();
+    click("Preview candidates"); await screen.findByText(/Success: preview/);
+    expect(request().groups.map((group) => group.editorId)).toEqual([3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(request().groups.every((group) => group.clueEditorId === 1 && group.selectedHypothesisEditorId === null)).toBe(true);
+    for (let id = 3; id <= 10; id++) click(`Remove group ${id}`);
+    expect(button("Remove clue 1").disabled).toBe(false);
+  });
+
+  it("joins, moves, leaves and deletes Groups without changing contents or enabling independent conditions", async () => {
+    vi.mocked(runCandidatePreview).mockImplementation(async (req) => response(req));
+    setup(); addEffect(); addClue();
+    change("Hypothesis 1 interpretation", "preserved interpretation");
+    change("Hypothesis 1 confidence", "high"); change("Hypothesis 1 applicability", "soft");
+    click("Add group for clue 1"); click("Add group for clue 1");
+    groupOf(1, 5);
+    expect(selected(5, null)).toBe(true); expect(selected(5, 1)).toBe(false);
+    expect(screen.queryByLabelText("Enable hypothesis 1")).toBeNull();
+    expect((screen.getByLabelText("Hypothesis 1 originating Clue") as HTMLSelectElement).disabled).toBe(true);
+    select(5, 1); groupOf(1, 5); expect(selected(5, 1)).toBe(true);
+    groupOf(1, 6); expect(selected(5, null)).toBe(true); expect(selected(6, null)).toBe(true);
+    select(6, 1); groupOf(1, null);
+    expect(selected(6, null)).toBe(true);
+    expect((screen.getByLabelText("Enable hypothesis 1") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText("Hypothesis 1 originating Clue") as HTMLSelectElement).disabled).toBe(false);
+    change("Hypothesis 1 originating Clue", "4");
+    expect((screen.getByLabelText("Hypothesis 1 group") as HTMLSelectElement).options.length).toBe(1);
+    change("Hypothesis 1 originating Clue", "1"); groupOf(1, 5); select(5, 1); click("Remove group 5");
+    expect((screen.getByLabelText("Enable hypothesis 1") as HTMLInputElement).checked).toBe(false);
+    expect(text("Hypothesis 1 interpretation").value).toBe("preserved interpretation");
+    expect(text("Hypothesis 1 effect 1 minimum").value).toBe("1");
+    click("Preview candidates"); await screen.findByText(/Success: preview/);
+    expect(request().hypotheses[0]).toEqual({ editorId: 2, clueEditorId: 1, interpretation: "preserved interpretation", enabled: false,
+      applicability: "soft", confidence: "high", effects: [{ editorId: 3, constraint: { type: "length", min: 1, max: 64 } }] });
+    expect(request().groups).toEqual([{ editorId: 6, clueEditorId: 1, selectedHypothesisEditorId: null }]);
+    click("Clear inputs and results"); seed(); addClue(); click("Add group for clue 1"); click("Preview candidates"); await screen.findByText(/Success: preview/);
+    expect(request().clues[0].editorId).toBe(7); expect(request().groups[0].editorId).toBe(8);
+  });
+
+  it("switches A/B/None explicitly, deletes selected members to None, and retains the final empty Group", () => {
+    setup(); addHypothesis(); click("Add group for clue 1");
+    groupOf(1, 4); groupOf(2, 4);
+    change("Hypothesis 1 interpretation", "Alternative A"); change("Hypothesis 2 interpretation", "Alternative B");
+    expect(selected(4, null)).toBe(true);
+    select(4, 1); expect(selected(4, 1)).toBe(true); expect(selected(4, 2)).toBe(false);
+    expect(screen.getByText("Selected interpretation:").textContent).toContain("Alternative A");
+    select(4, 2); expect(selected(4, 1)).toBe(false); expect(selected(4, 2)).toBe(true);
+    select(4, null); expect(selected(4, 2)).toBe(false);
+    select(4, 1); click("Remove hypothesis 1");
+    expect(selected(4, null)).toBe(true); expect(selected(4, 1)).toBe(false);
+    expect(text("Hypothesis 1 interpretation").value).toBe("Alternative B");
+    click("Remove hypothesis 1");
+    expect(screen.getByText("Empty group: None is the only selection.")).toBeTruthy();
+    expect(selected(4, null)).toBe(true); expect(button("Remove clue 1").disabled).toBe(true);
+    click("Remove group 4"); expect(button("Remove clue 1").disabled).toBe(false);
+  });
+
+  it("keeps an unrelated Group selection while moving a selected member into it", () => {
+    setup(); addHypothesis(); click("Add group for clue 1"); click("Add group for clue 1");
+    groupOf(1, 4); groupOf(2, 5); select(4, 1); select(5, 2);
+    groupOf(1, 5);
+    expect(selected(4, null)).toBe(true); expect(selected(5, 2)).toBe(true); expect(selected(5, 1)).toBe(false);
+  });
+
+  it("renders the submitted selection and Soft provenance while preserving the selection snapshot", async () => {
+    vi.mocked(runCandidatePreview).mockImplementation(async (req) => {
+      const res = response(req); res.candidates[0].matchedSoftHypothesisIds = [res.hypothesisBindings[0].hypothesisId]; res.candidates[0].relativePoints = 2; return res;
+    });
+    setup(); addEffect(); addEffect(); addHypothesis(); click("Add group for clue 1");
+    groupOf(1, 6); groupOf(2, 6); change("Hypothesis 1 applicability", "soft"); change("Hypothesis 1 interpretation", "Evaluated A");
+    select(6, 1); click("Preview candidates"); await screen.findByText(/Success: preview/);
+    const submitted = request();
+    expect(within(screen.getByRole("region", { name: "Submitted Alternative Group selections" })).getByText("Evaluated A")).toBeTruthy();
+    expect(within(screen.getByRole("table")).getByText("Evaluated A")).toBeTruthy();
+    select(6, 2);
+    expect(screen.queryByRole("table")).toBeNull(); expect(screen.queryByRole("region", { name: "Submitted Alternative Group selections" })).toBeNull();
+    expect(submitted.groups).toEqual([{ editorId: 6, clueEditorId: 1, selectedHypothesisEditorId: 2 }]);
+    expect(submitted.hypotheses[0]).toMatchObject({ groupEditorId: 6, enabled: false });
+  });
+
+  it.each(["success", "error"] as const)("discards stale %s after pending A→B→A selection and permits retry only on settlement", async (outcome) => {
+    const pending = hold(); setup(); addHypothesis(); click("Add group for clue 1"); groupOf(1, 4); groupOf(2, 4); select(4, 1);
+    click("Preview candidates"); const submitted = request();
+    select(4, 2); select(4, 1);
+    expect(button("Preview running…").disabled).toBe(true); expect(status().textContent).toContain("Loading");
+    expect(submitted.groups[0].selectedHypothesisEditorId).toBe(2);
+    await act(async () => { if (outcome === "success") pending.resolve(response(submitted)); else pending.reject(new Error("Private selection error")); });
+    expect(screen.queryByRole("table")).toBeNull(); expect(status().textContent).toContain("State: Idle"); expect(status().textContent).not.toContain("Private");
+    vi.mocked(runCandidatePreview).mockImplementation(async (req) => response(req)); click("Preview candidates"); await screen.findByText(/Success: preview/);
+    expect(request().requestId).not.toBe(submitted.requestId); expect(request().groups[0].selectedHypothesisEditorId).toBe(2);
+  });
+
+  it.each(["success", "error"] as const)("preserves worker ownership during pending membership edits, Group deletion, Clear and stale %s", async (outcome) => {
+    const pending = hold(); setup(); click("Add group for clue 1"); groupOf(1, 3); select(3, 1);
+    click("Preview candidates"); const submitted = request();
+    groupOf(1, null); groupOf(1, 3); click("Remove group 3"); click("Add group for clue 1"); click("Clear inputs and results");
+    seed(); addClue(); addHypothesis(); click("Add group for clue 1");
+    expect(button("Preview running…").disabled).toBe(true); expect(runCandidatePreview).toHaveBeenCalledTimes(1);
+    await act(async () => { if (outcome === "success") pending.resolve(response(submitted)); else pending.reject(new Error("Private membership error")); });
+    expect(screen.queryByRole("table")).toBeNull(); expect(status().textContent).not.toContain("Private");
+    vi.mocked(runCandidatePreview).mockImplementation(async (req) => response(req)); click("Preview candidates"); await screen.findByText(/Success: preview/);
+    expect(request().groups[0].editorId).toBe(7); expect(request().groups[0].selectedHypothesisEditorId).toBeNull();
+    expect(request().hypotheses[0].enabled).toBe(true); expect(request().hypotheses[0].groupEditorId).toBeUndefined();
+  });
+});

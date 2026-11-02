@@ -116,12 +116,13 @@ mod tests {
             "clues":[{"editorId":43,"text":" Synthetic clue 🧩\n", "source":"Synthetic source"}],
             "hypotheses":[{
                 "editorId":44,"clueEditorId":43,"interpretation":"Two effects, one Medium weight",
-                "enabled":true,"applicability":"soft","confidence":"medium",
+                "enabled":false,"groupEditorId":47,"applicability":"soft","confidence":"medium",
                 "effects":[
                     {"editorId":45,"constraint":{"type":"contains","literal":"1"}},
                     {"editorId":46,"constraint":{"type":"suffix","literal":"!"}}
                 ]
-            }]
+            }],
+            "groups":[{"editorId":47,"clueEditorId":43,"selectedHypothesisEditorId":44}]
         });
         let raw = || ipc::InvokeBody::Raw(serde_json::to_vec(&payload).unwrap());
         let result = invoke(&main, local, "candidate_preview", raw()).unwrap();
@@ -142,6 +143,24 @@ mod tests {
             serde_json::json!([{"editorId":44,"hypothesisId":7}])
         );
         assert_eq!(result["stop"], "completed");
+        let mut no_selection = payload.clone();
+        no_selection["groups"][0]["selectedHypothesisEditorId"] = serde_json::Value::Null;
+        let unselected = invoke(
+            &main,
+            local,
+            "candidate_preview",
+            ipc::InvokeBody::Raw(serde_json::to_vec(&no_selection).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(unselected["candidates"][0]["relativePoints"], 3);
+        assert_eq!(
+            unselected["candidates"][0]["matchedSoftHypothesisIds"],
+            serde_json::json!([4])
+        );
+        assert_eq!(
+            unselected["hypothesisBindings"],
+            result["hypothesisBindings"]
+        );
         assert!(invoke(&other, local, "candidate_preview", raw()).is_err());
         assert!(invoke(&main, "https://example.invalid", "candidate_preview", raw()).is_err());
         assert_eq!(
