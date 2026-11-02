@@ -1,9 +1,9 @@
 # Bounded desktop candidate preview
 
 The React interface accepts manual seeds, explicit case/prefix/suffix options,
-independent Direct Constraints, and Clue-backed Hypotheses. Issue
-[#16](https://github.com/cludewn/cluebench/issues/16) adds original Clue evidence
-and multiple interpreted effects to the existing manual-origin workflow.
+independent Direct Constraints, Clue-backed Hypotheses, and Alternative Groups.
+Original Clue evidence and multiple interpreted effects remain separate from
+explicit exclusive selection of interpretations in a group.
 The UI-independent Rust Core performs generation, Hard filtering, and Soft
 evaluation; the frontend contains no generator or constraint matcher. This is
 bounded exploration of configured paths, not password verification or structural
@@ -37,20 +37,55 @@ needs to be nonempty. A Clue-backed Hypothesis references exactly one Clue and
 stores a separate `interpretation`, which may also be empty. Multiple
 Hypotheses can reference the same Clue without merging equal interpretations.
 Users explicitly add, edit, or remove Hypotheses, change their originating
-Clue, enable or disable them, choose Hard/Soft applicability and confidence,
+Clue while independent, enable or disable independent hypotheses, choose Hard/Soft applicability and confidence,
 and add, edit, change type, or remove their constraint effects.
 
-A Clue cannot be deleted while any Hypothesis refers to it. This includes
-disabled Hypotheses, incomplete drafts, and Hypotheses with zero effects.
-The user must first remove those Hypotheses or explicitly assign them to
-another Clue. There is no cascade deletion or automatic origin reassignment.
+A Clue cannot be deleted while any Hypothesis or group anchor refers to it.
+This includes disabled Hypotheses, incomplete drafts, Hypotheses with zero
+effects, and empty groups. The user must first remove those references or
+explicitly reassign independent Hypotheses to another Clue. There is no cascade
+deletion or automatic origin reassignment.
 An unreferenced Clue can be deleted; deletion invalidates existing results.
 
 Removing the final effect leaves its Hypothesis in place. A zero-effect
 Hypothesis neither filters candidates nor contributes Soft points. This is
-shown in the editor. Disabled Hypotheses do not enter the resolved scenario,
+shown in the editor. Disabled Independent Hypotheses do not enter the resolved scenario,
 but all their effects remain subject to validation; an invalid disabled draft
-blocks Preview until corrected or removed.
+blocks Preview until corrected or removed. The same validation applies to
+unselected grouped Hypotheses.
+
+### Alternative Groups and editing transitions
+
+Each group is anchored to exactly one existing Clue. Only Hypotheses from that
+Clue may join it, and each Hypothesis belongs to at most one group. Membership
+is stored only as `groupEditorId` on the Hypothesis; groups store no member list.
+Groups have stable editor-ID-derived labels and no editable name or description.
+Creating a group leaves it empty with explicit `None` selection. Empty groups
+remain valid and continue protecting their anchor Clue from deletion.
+
+Independent activation uses `enabled`. Grouped activation uses only the group's
+explicit selection: one member or `None`. None activates no members. This is one
+selected scenario, not logical OR, automatic exclusivity inference, or a search
+over group combinations. All groups' selections are resolved together with
+enabled independent Hypotheses and Direct Constraints.
+
+| Edit | Result |
+| --- | --- |
+| Independent → Grouped | Join the specified same-Clue group, set `enabled=false`, retain its selection. |
+| Grouped → Independent | Remove membership and set `enabled=false`; clear the old selection if it selected that member. |
+| Move between groups | Clear the source selection only if moving its selected member; retain destination selection and `enabled=false`. |
+| Specify the same group again | No-op; retain selection. |
+| Select a member or None | Replace only that group's selection explicitly. |
+| Delete a Hypothesis | Remove it and clear its group's selection if selected; never select a replacement. |
+| Remove the final member | Keep the empty group with None selection. |
+| Delete a group | Keep all members and their effects as Independent, `enabled=false`. |
+| Change a grouped Hypothesis's Clue | Blocked; explicitly Ungroup first. |
+
+Transitions preserve remaining Hypothesis/effect IDs, interpretation, confidence,
+applicability, and constraint values. Disabling when joining or leaving prevents
+unexpected Hard activation and never restores an earlier enabled value. Pure
+editing helpers return memberships and groups together for a single revision
+update. Invalid references or selections are rejected rather than repaired.
 
 Direct Constraints remain a separate optional list. Each row is one independent
 manual-origin Hypothesis with one effect, its own enabled state, applicability,
@@ -76,8 +111,8 @@ Leading/trailing spaces and case are preserved. Repeated characters in
 integer validation; invalid drafts are not trimmed, clamped, truncated, or
 silently repaired. Contradictory but individually valid constraints are allowed.
 
-Every constraint effect of every enabled Hard Hypothesis must match. Soft
-mismatches never reject candidates. An enabled Soft Hypothesis with at least
+Every constraint effect of every active Hard Hypothesis must match. Soft
+mismatches never reject candidates. An active Soft Hypothesis with at least
 one effect contributes Low 1, Medium 2, or High 3 points only when **all** its
 effects match, and contributes that weight **once per Hypothesis**. A Medium
 Hypothesis with two matching effects adds 2 points; one matching effect adds 0.
@@ -126,9 +161,9 @@ is historical evidence, not current native-path verification.
 ## Identity and provenance
 
 One session-local monotonically increasing nonzero `u32` editor allocator
-serves Direct Constraints, Clues, Hypotheses, and effects. Every such record has
+serves Direct Constraints, Clues, Hypotheses, effects, and groups. Every such record has
 a unique `editorId`, used for React keys. Editing values, changing effect type,
-or changing a Hypothesis origin preserves IDs. Removal and Clear never reuse
+changing membership or selection, or changing an independent Hypothesis origin preserves IDs. Removal and Clear never reuse
 IDs or reset allocation; exhaustion prevents allocation before wraparound.
 These identities are distinct from request-local Core IDs and from any future
 persistent project identity. Manual Seeds keep their existing request-local IDs.
@@ -140,21 +175,28 @@ allocates in this order:
 2. Each Direct Constraint's Hypothesis, then its single effect.
 3. All Clues.
 4. Each Clue-backed Hypothesis, then all its effects.
+5. All Alternative Groups.
 
 For `N` seeds and zero-based direct-row index `i`, existing direct allocation
 remains Hypothesis `N + 2*i + 1`, effect `N + 2*i + 2`. After allocating all
 Clues, the adapter maps `clueEditorId` to the assigned Core Clue ID and constructs
-`HypothesisOrigin::Clue`. All Hypotheses use independent activation. The maximum
-Core entity ID is 128: 64 seeds + 32 direct entities + 8 Clues + 8 Clue-backed
-Hypotheses + 16 Clue-backed effects. Disabled and zero-effect Hypotheses still
-receive IDs and bindings. Core validation checks the complete project before
-resolution excludes disabled entities. No placeholder Clues or AlternativeGroups
-are constructed.
+`HypothesisOrigin::Clue`. Separate editor-to-Core maps resolve Hypothesis and
+group references. Independent Hypotheses use `Activation::Independent { enabled }`;
+grouped ones use `Activation::Grouped { group_id }`. Groups get independent Core
+IDs and `selected: Option<Id>`. Allocating groups last preserves existing
+Hypothesis binding order. Bindings are recalculated from the submitted request,
+including Seed counts. The maximum Core entity ID is 136: 64 seeds + 32 direct
+entities + 8 Clues + 8 Clue-backed Hypotheses + 16 Clue-backed effects + 8 groups.
+Inactive and zero-effect Hypotheses still receive IDs and bindings. The complete
+project, including unselected effects and empty groups, is validated before
+Core resolution constructs the active scenario.
 
 A result explanation follows a matched Core Hypothesis ID through a validated
 binding, the submitted Hypothesis, its originating Clue, and that Clue's original
-text/source. The frontend retains the submitted request snapshot for this
-purpose and never interprets an old response from mutable editor state. Clue
+text/source. The frontend retains the submitted request snapshot, including
+groups, memberships, selections, Clues, effects, Direct Constraints, Seeds,
+options, and limits. Results display the selection and selected interpretation
+used for evaluation, including None. They never interpret an old response from mutable editor state. Clue
 strings and interpretations are not copied into every candidate response.
 
 ## Resource limits
@@ -175,6 +217,8 @@ limits. The frontend mirrors them for feedback; invalid input is rejected.
 | Logical generation config | 1,043 bytes |
 | Direct Constraints, including disabled | 0–16 |
 | Clues / Clue-backed Hypotheses | 0–8 / 0–8 |
+| Alternative Groups / memberships | 0–8 / 0–8 |
+| Request-local Core entities | 136 |
 | Effects per Clue-backed Hypothesis | 0–4 |
 | Clue-backed effects / all effects including Direct | 0–16 / 0–32 |
 | Individual Clue text / source | 512 / 256 UTF-8 bytes |
@@ -232,9 +276,15 @@ type Hypothesis = {
   clueEditorId: number;
   interpretation: string;
   enabled: boolean;
+  groupEditorId?: number;
   applicability: "hard" | "soft";
   confidence: "low" | "medium" | "high";
   effects: { editorId: number; constraint: Constraint }[];
+};
+type AlternativeGroup = {
+  editorId: number;
+  clueEditorId: number;
+  selectedHypothesisEditorId: number | null;
 };
 type Constraint =
   | { type: "length"; min: number; max: number }
@@ -249,12 +299,19 @@ type Constraint =
 ```
 
 Each Direct Constraint keeps `editorId`, `enabled`, `applicability`, `confidence`,
-and one `constraint`. Omitted `directConstraints`, `clues`, or `hypotheses`
-default to `[]`; explicit `null` is invalid. All record fields are required,
-including `effects`, where `[]` is valid. Existing defaults for omitted fields
+and one `constraint`. The request also includes `groups: AlternativeGroup[]`.
+Omitted `directConstraints`, `clues`, `hypotheses`, or `groups`
+default to `[]`; explicit `null` is invalid. Except for `groupEditorId`, all record fields are required,
+including `effects`, where `[]` is valid, and `selectedHypothesisEditorId`,
+where explicit `null` means None but omission is rejected. Optional
+`groupEditorId` must be a nonzero `u32` when present; explicit null is rejected.
+Omission means independent activation using `enabled`. Membership requires
+`enabled=false` as a compatibility placeholder; `true` is rejected. Core Grouped
+activation has no enabled flag. Existing defaults for omitted fields
 within `limits` remain. Unknown/duplicate fields, unknown enum variants,
 malformed JSON, invalid types/numbers/Unicode, duplicate editor IDs, missing or
-wrong-kind Clue references, and invalid disabled records are rejected with fixed
+wrong-kind Clue/group/Hypothesis references, cross-Clue membership, nonmember
+selection, empty-group selection, and invalid inactive records are rejected with fixed
 non-sensitive errors. Direct Serde deserialization preserves duplicate-field
 detection without passing through `serde_json::Value`. Frontend canonical
 objects do not imply that Serde rejects every equivalent positional or enum
@@ -271,7 +328,11 @@ for both Hypothesis kinds. Values come from actual Core callback records.
 The frontend validates exact response fields, serialized size, request identity,
 complete unique bindings, exact Core allocation, and no collisions between
 Hypothesis kinds. Match IDs must be unique, at most 24, and refer to submitted
-enabled Soft Hypotheses with nonzero effects. Relative points must be an integer
+active Soft Hypotheses with nonzero effects. Independent activity is
+`enabled === true`; grouped activity means the submitted group's selection
+equals that Hypothesis's editor ID. This same check determines whether active
+Hard effects exist; `enabled=false` does not make a selected member inactive.
+Relative points must be an integer
 from 0–72 equal to the sum of those Hypotheses' confidence weights, once each.
 It considers active Hard effects from both workflows and retains seed/path,
 affix, counter, and stop consistency checks. This validates provenance and score
@@ -305,11 +366,18 @@ does not infer stops from candidate count, or manufacture `cancelled` or
 CandidatePreview owns all drafts, editor allocation, request identity, input
 revision, active request, pending state, submitted snapshot, and result/error.
 Every meaningful edit, add, remove, origin change, enable/applicability/confidence
-change, effect type change, rejected raw operation, and Clear advances the
+change, effect type change, group creation/deletion, membership transition,
+member/None selection, rejected raw operation, and Clear advances the
 revision and invalidates results. Edits remain allowed while Loading. Only the
 still-current request/revision can publish success or error; unmount prevents
 late updates. Pending continues until the real Promise settles. Clear empties
-input and display without resetting editor allocation or cancelling Rust. No
+input, groups, and display without resetting editor allocation, request sequence,
+or active worker ownership, or cancelling Rust. A→B→A selection changes still
+advance the revision and reject both obsolete successes and errors. Hypothesis
+cards remain flat siblings keyed by editor ID instead of being reparented into
+groups, preserving in-progress IME inputs across group edits. Clear remounts
+SeedInput; guard cleanup, rejection of unstarted composition-end events, and
+stable affix row IDs remain required. No
 automatic Preview is added.
 
 Clue evidence, interpretations, constraint literals, Seeds, and candidates are
@@ -342,8 +410,8 @@ The [Issue #12 report](candidate-preview-verification.md),
 Their results and unexecuted checks describe their creation time, not current
 CI status. Do not rewrite them or create an Issue-specific report by default.
 
-The complete Project Workspace, AlternativeGroup editing and exclusive
-selection, Hypothesis-owned Seed effects, persistence/migration/encryption,
+The complete Project Workspace, cross-Clue grouping, automatic exclusivity,
+logical OR, batch scenario comparison, Hypothesis-owned Seed effects, persistence/migration/encryption,
 structure analysis UI, canvas, export, interactive cancellation, streaming/jobs,
 advanced ranking, deduplication, recursive transforms, CLI/HTTP APIs, stable
 external Rust API, runtime AI, remote authentication, release packaging, and

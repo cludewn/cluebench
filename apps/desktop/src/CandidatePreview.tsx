@@ -10,10 +10,10 @@ import type { PreviewResponse } from "./preview-bridge";
 import { useRawTextGuard } from "./use-raw-text-guard";
 import DirectConstraintEditor from "./DirectConstraintEditor";
 import ClueHypothesisEditor from "./ClueHypothesisEditor";
-import { createDefaultEffect, createDefaultHypothesis } from "./clue-hypotheses";
+import { createDefaultEffect, createDefaultGroup, createDefaultHypothesis } from "./clue-hypotheses";
 import { createDefaultDirectConstraint, describeDirectConstraint } from "./direct-constraints";
 
-const defaults = (): PreviewInput => ({ seedText: "", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", directConstraints: [], clues: [], hypotheses: [] });
+const defaults = (): PreviewInput => ({ seedText: "", caseVariants: ["original"], prefixes: [""], suffixes: [""], attemptLimit: "2048", emissionLimit: "50", directConstraints: [], clues: [], hypotheses: [], groups: [] });
 const stopLabels = { completed: "Completed", attemptLimit: "AttemptLimit", outputLimit: "OutputLimit", cancelled: "Cancelled", consumerStopped: "ConsumerStopped" } as const;
 const caseLabel = (value: CaseVariant) => CASE_OPTIONS.find((option) => option.value === value)?.label;
 
@@ -64,6 +64,14 @@ function PreviewResult({ result, request }: { result: PreviewResponse; request: 
       <dt>Effective attempt limit</dt><dd>{result.effectiveLimits.attemptLimit}</dd>
       <dt>Effective emission limit</dt><dd>{result.effectiveLimits.emissionLimit}</dd>
     </dl>
+    {request.groups.length > 0 && <section aria-label="Submitted Alternative Group selections">
+      <h4>Evaluated Alternative Group selections</h4>
+      <p className="hint">These selections belong to the submitted scenario. One member per Group, or None, was active during this Preview.</p>
+      <ul>{request.groups.map((group) => {
+        const selected = request.hypotheses.find((hypothesis) => hypothesis.editorId === group.selectedHypothesisEditorId);
+        return <li key={group.editorId}>Group {group.editorId} (Clue {request.clues.findIndex((clue) => clue.editorId === group.clueEditorId) + 1}): {selected ? <>Hypothesis {request.hypotheses.indexOf(selected) + 1} — <span className="secret-text">{selected.interpretation || "(empty interpretation)"}</span> ({selected.applicability}, {selected.effects.length} effects)</> : "None — no member active"}</li>;
+      })}</ul>
+    </section>}
     <p className="hint">Completed means all selected generation paths were examined. It does not cover the entire password space. Zero candidates does not prove unsatisfiability.</p>
     {result.candidates.length > 0 && <div className="candidate-scroll"><table>
       <caption>Candidate records in Core generation order</caption>
@@ -156,6 +164,11 @@ export default function CandidatePreview() {
     const editorId = allocateEditorId();
     if (editorId !== null) edit({ hypotheses: [...input.hypotheses, createDefaultHypothesis(editorId, clueEditorId)] });
   }
+  function addGroup(clueEditorId: number) {
+    if ((input.groups ?? []).length >= 8 || !input.clues.some((clue) => clue.editorId === clueEditorId)) return;
+    const editorId = allocateEditorId();
+    if (editorId !== null) edit({ groups: [...(input.groups ?? []), createDefaultGroup(editorId, clueEditorId)] });
+  }
   function addEffect(hypothesisEditorId: number) {
     const hypothesis = input.hypotheses.find((row) => row.editorId === hypothesisEditorId);
     if (!hypothesis || hypothesis.effects.length >= 4 || input.hypotheses.reduce((sum, row) => sum + row.effects.length, 0) >= 16) return;
@@ -197,7 +210,7 @@ export default function CandidatePreview() {
     <div className="option-grid"><AffixOptions key={`prefix-${clearSequence}`} name="Prefix" onRejected={rejectInput} onCompositionChange={compositionChange} onChange={(prefixes, blank) => { setAffixBlank((current) => ({ ...current, prefix: blank })); edit({ prefixes }); }} /><AffixOptions key={`suffix-${clearSequence}`} name="Suffix" onRejected={rejectInput} onCompositionChange={compositionChange} onChange={(suffixes, blank) => { setAffixBlank((current) => ({ ...current, suffix: blank })); edit({ suffixes }); }} /></div>
     <p className="hint">Only selected case variants are used, in the order shown. Generation order: Seed → Case → Prefix → Suffix. Affixes keep their case. Results outside the 1–64-byte domain are skipped, never truncated.</p>
     <DirectConstraintEditor constraints={input.directConstraints} onAdd={addConstraint} canAdd={editorSequence.current < 0xffff_ffff} onChange={(directConstraints) => edit({ directConstraints })} onRejected={rejectInput} onCompositionChange={compositionChange} />
-    <ClueHypothesisEditor clues={input.clues} hypotheses={input.hypotheses} onCluesChange={(clues) => edit({ clues })}
+    <ClueHypothesisEditor clues={input.clues} hypotheses={input.hypotheses} groups={input.groups ?? []} onScenarioChange={edit} onAddGroup={addGroup} onCluesChange={(clues) => edit({ clues })}
       onHypothesesChange={(hypotheses) => edit({ hypotheses })} onAddClue={addClue} onAddHypothesis={addHypothesis} onAddEffect={addEffect}
       onRejected={rejectInput} onCompositionChange={compositionChange} canAdd={editorSequence.current < 0xffff_ffff} />
     <div className="option-grid"><label>Attempt limit<input inputMode="numeric" value={input.attemptLimit} onChange={(event) => edit({ attemptLimit: event.target.value })} /><small>Default {PREVIEW_LIMITS.defaultAttempts}; maximum {PREVIEW_LIMITS.maxAttempts}.</small></label><label>Emission limit<input inputMode="numeric" value={input.emissionLimit} onChange={(event) => edit({ emissionLimit: event.target.value })} /><small>Default {PREVIEW_LIMITS.defaultEmissions}; maximum {PREVIEW_LIMITS.maxEmissions}.</small></label></div>

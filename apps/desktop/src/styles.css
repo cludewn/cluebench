@@ -113,7 +113,7 @@ footer {
 main { max-width: 1040px; }
 .preview { margin: 28px 0; padding: 24px; border: 1px solid #d4dce3; border-radius: 10px; background: white; }
 label { display: block; font-weight: 600; }
-textarea, input:not([type="checkbox"]) { display: block; width: 100%; box-sizing: border-box; margin: 6px 0; padding: 9px; font: inherit; border: 1px solid #8292a1; border-radius: 4px; color: inherit; background: white; }
+textarea, input:not([type="checkbox"]):not([type="radio"]) { display: block; width: 100%; box-sizing: border-box; margin: 6px 0; padding: 9px; font: inherit; border: 1px solid #8292a1; border-radius: 4px; color: inherit; background: white; }
 textarea, .secret-text { font-family: ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 textarea { resize: vertical; }
 select { display: block; width: 100%; box-sizing: border-box; margin: 6px 0; padding: 9px; font: inherit; border: 1px solid #8292a1; border-radius: 4px; color: inherit; background: white; }
@@ -150,3 +150,6 @@ summary { cursor: pointer; font-weight: 600; }
 .provenance { display: block; margin: 8px 0; min-width: 180px; }
 .provenance dt { font-size: 0.85rem; font-weight: 600; }
 .provenance dd { margin-bottom: 8px; }
+
+.alternative-group { border-left: 3px solid #88744d; }
+.alternative-group .check { display: flex; margin: 8px 0; }

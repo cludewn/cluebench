@@ -16,9 +16,9 @@ use std::{
 };
 
 use cluebench_core::{
-    Activation, Applicability, CaseVariant, CharacterClass, Clue, Confidence, Constraint,
-    ConstraintEffect, Effect, GenerationConfig, GenerationStats, GenerationStop, Hypothesis,
-    HypothesisOrigin, Id, RawProject, Seed,
+    Activation, AlternativeGroup, Applicability, CaseVariant, CharacterClass, Clue, Confidence,
+    Constraint, ConstraintEffect, Effect, GenerationConfig, GenerationStats, GenerationStop,
+    Hypothesis, HypothesisOrigin, Id, RawProject, Seed,
 };
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -38,6 +38,8 @@ pub(crate) const MAX_ALLOWED_BYTES: usize = 95;
 pub(crate) const MAX_CONSTRAINT_STRING_BYTES: usize = 3040;
 pub(crate) const MAX_CLUES: usize = 8;
 pub(crate) const MAX_HYPOTHESES: usize = 8;
+pub(crate) const MAX_GROUPS: usize = 8;
+pub(crate) const MAX_MEMBERSHIPS: usize = 8;
 pub(crate) const MAX_EFFECTS_PER_HYPOTHESIS: usize = 4;
 pub(crate) const MAX_CLUE_EFFECTS: usize = 16;
 pub(crate) const MAX_TOTAL_EFFECTS: usize = 32;
@@ -45,7 +47,7 @@ pub(crate) const MAX_CLUE_TEXT_BYTES: usize = 512;
 pub(crate) const MAX_CLUE_SOURCE_BYTES: usize = 256;
 pub(crate) const MAX_INTERPRETATION_BYTES: usize = 256;
 pub(crate) const MAX_UNICODE_BYTES: usize = 2048;
-pub(crate) const MAX_CORE_ID: u32 = 128;
+pub(crate) const MAX_CORE_ID: u32 = 136;
 pub(crate) const MAX_MATCHED_SOFT_IDS: usize = 24;
 pub(crate) const MAX_RELATIVE_POINTS: u32 = 72;
 pub(crate) const DEFAULT_ATTEMPT_LIMIT: u64 = 2048;
@@ -134,6 +136,8 @@ struct PreviewRequest {
     clues: Vec<PreviewClue>,
     #[serde(default)]
     hypotheses: Vec<PreviewHypothesis>,
+    #[serde(default)]
+    groups: Vec<PreviewGroup>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -154,6 +158,37 @@ struct PreviewHypothesis {
     applicability: PreviewApplicability,
     confidence: PreviewConfidence,
     effects: Vec<PreviewEffect>,
+    #[serde(
+        default,
+        deserialize_with = "present_group_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    group_editor_id: Option<u32>,
+}
+
+// A missing membership means Independent. A present membership must be a u32;
+// explicit null must not collapse into the omitted-field meaning.
+fn present_group_id<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u32>, D::Error> {
+    u32::deserialize(deserializer).map(Some)
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreviewGroup {
+    editor_id: u32,
+    clue_editor_id: u32,
+    #[serde(deserialize_with = "required_selection")]
+    selected_hypothesis_editor_id: Option<u32>,
+}
+
+// deserialize_with deliberately requires this field even though its value may
+// be null. None is an explicit scenario choice, never a missing-field default.
+fn required_selection<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u32>, D::Error> {
+    Option::<u32>::deserialize(deserializer)
 }
 
 #[derive(Deserialize, Serialize)]
@@ -492,6 +527,7 @@ impl PreviewRequest {
             .chain(self.clues.iter().map(|clue| clue.editor_id))
             .chain(self.hypotheses.iter().map(|row| row.editor_id))
             .chain(effects.clone().map(|effect| effect.editor_id))
+            .chain(self.groups.iter().map(|group| group.editor_id))
             .all(|id| id != 0 && editor_ids.insert(id));
         let unicode_valid = self.clues.iter().all(|clue| {
             evidence_text(&clue.text, MAX_CLUE_TEXT_BYTES)
@@ -508,11 +544,37 @@ impl PreviewRequest {
                 .sum::<usize>()
                 <= MAX_UNICODE_BYTES;
         let clue_effect_count = effects.count();
+        let groups: BTreeMap<_, _> = self
+            .groups
+            .iter()
+            .map(|group| (group.editor_id, group))
+            .collect();
         let relationships_valid = self.clues.len() <= MAX_CLUES
             && self.hypotheses.len() <= MAX_HYPOTHESES
+            && self.groups.len() <= MAX_GROUPS
+            && self
+                .hypotheses
+                .iter()
+                .filter(|row| row.group_editor_id.is_some())
+                .count()
+                <= MAX_MEMBERSHIPS
             && self.hypotheses.iter().all(|row| {
                 clue_ids.contains(&row.clue_editor_id)
                     && row.effects.len() <= MAX_EFFECTS_PER_HYPOTHESIS
+                    && row.group_editor_id.is_none_or(|id| {
+                        !row.enabled
+                            && groups
+                                .get(&id)
+                                .is_some_and(|group| group.clue_editor_id == row.clue_editor_id)
+                    })
+            })
+            && self.groups.iter().all(|group| {
+                clue_ids.contains(&group.clue_editor_id)
+                    && group.selected_hypothesis_editor_id.is_none_or(|id| {
+                        self.hypotheses.iter().any(|row| {
+                            row.editor_id == id && row.group_editor_id == Some(group.editor_id)
+                        })
+                    })
             })
             && clue_effect_count <= MAX_CLUE_EFFECTS
             && self.direct_constraints.len() + clue_effect_count <= MAX_TOTAL_EFFECTS;
@@ -520,7 +582,8 @@ impl PreviewRequest {
             + 2 * self.direct_constraints.len()
             + self.clues.len()
             + self.hypotheses.len()
-            + clue_effect_count;
+            + clue_effect_count
+            + self.groups.len();
         if !(id_valid
             && seeds_valid
             && cases_valid
@@ -581,14 +644,29 @@ fn check_canonical_budget(request: &PreviewRequest) -> Result<(), PreviewError> 
     Ok(())
 }
 
-// Validation bounds all generated IDs to 128. Editor IDs are independent of
-// these request-local IDs. Allocate all Clues before resolving their origins.
+// Validation bounds all generated IDs to 136. Editor IDs are independent of
+// these request-local IDs. Groups follow all Hypotheses/effects so existing
+// bindings retain their order. Pre-map those final IDs for Grouped activation.
 fn build_project(
     seeds: Vec<String>,
     direct_constraints: Vec<DirectConstraint>,
     clues: Vec<PreviewClue>,
     clue_hypotheses: Vec<PreviewHypothesis>,
+    groups: Vec<PreviewGroup>,
 ) -> Result<(RawProject, Vec<ConstraintBinding>, Vec<ConstraintBinding>), PreviewError> {
+    let group_start = seeds.len()
+        + 2 * direct_constraints.len()
+        + clues.len()
+        + clue_hypotheses.len()
+        + clue_hypotheses
+            .iter()
+            .map(|row| row.effects.len())
+            .sum::<usize>();
+    let group_ids: BTreeMap<_, _> = groups
+        .iter()
+        .enumerate()
+        .map(|(index, group)| (group.editor_id, Id((group_start + index + 1) as u32)))
+        .collect();
     let mut next_id = 0_u32;
     let mut allocate = || {
         next_id += 1;
@@ -634,8 +712,10 @@ fn build_project(
         });
     }
     let mut hypothesis_bindings = Vec::with_capacity(clue_hypotheses.len());
+    let mut hypothesis_ids = BTreeMap::new();
     for row in clue_hypotheses {
         let id = allocate();
+        hypothesis_ids.insert(row.editor_id, id);
         let clue_id = clue_ids
             .get(&row.clue_editor_id)
             .copied()
@@ -650,8 +730,15 @@ fn build_project(
             interpretation: row.interpretation,
             confidence: row.confidence.into(),
             applicability: row.applicability.into(),
-            activation: Activation::Independent {
-                enabled: row.enabled,
+            activation: match row.group_editor_id {
+                Some(editor_id) => Activation::Grouped {
+                    group_id: *group_ids
+                        .get(&editor_id)
+                        .ok_or(PreviewError::InvalidRequest)?,
+                },
+                None => Activation::Independent {
+                    enabled: row.enabled,
+                },
             },
             effects: row
                 .effects
@@ -663,6 +750,20 @@ fn build_project(
                     })
                 })
                 .collect(),
+        });
+    }
+    for group in groups {
+        project.alternative_groups.push(AlternativeGroup {
+            id: allocate(),
+            selected: group
+                .selected_hypothesis_editor_id
+                .map(|editor_id| {
+                    hypothesis_ids
+                        .get(&editor_id)
+                        .copied()
+                        .ok_or(PreviewError::InvalidRequest)
+                })
+                .transpose()?,
         });
     }
     Ok((project, constraint_bindings, hypothesis_bindings))
@@ -690,6 +791,7 @@ fn generate_preview(bytes: Vec<u8>) -> Result<String, PreviewError> {
         request.direct_constraints,
         request.clues,
         request.hypotheses,
+        request.groups,
     )?;
     let project = raw.validate().map_err(|_| PreviewError::CoreFailed)?;
     let model = project.resolve();
@@ -1090,6 +1192,7 @@ mod tests {
             decoded.direct_constraints,
             decoded.clues,
             decoded.hypotheses,
+            decoded.groups,
         )
         .unwrap();
         assert!(project.clues.is_empty());
@@ -1916,6 +2019,342 @@ mod tests {
         request
     }
 
+    fn group(editor_id: u32, clue_editor_id: u32, selected: Option<u32>) -> Value {
+        json!({"editorId":editor_id,"clueEditorId":clue_editor_id,"selectedHypothesisEditorId":selected})
+    }
+
+    fn grouped_fixture() -> Value {
+        let mut request = clue_fixture();
+        request["seeds"] = json!(["Ab", "Bb", "AB", "ZZ"]);
+        request["hypotheses"]
+            .as_array_mut()
+            .unwrap()
+            .push(hypothesis(
+                104,
+                101,
+                vec![effect(105, json!({"type":"contains","literal":"B"}))],
+            ));
+        for row in request["hypotheses"].as_array_mut().unwrap() {
+            row["enabled"] = json!(false);
+            row["groupEditorId"] = json!(201);
+        }
+        request["groups"] = json!([group(201, 101, Some(102))]);
+        request
+    }
+
+    #[test]
+    fn exclusive_a_b_none_selection_uses_core_resolution_without_removing_members() {
+        let mut request = grouped_fixture();
+        for (selection, texts, rejections) in [
+            (Some(102), vec!["Ab", "AB"], 2),
+            (Some(104), vec!["Bb", "AB"], 2),
+            (None, vec!["Ab", "Bb", "AB", "ZZ"], 0),
+        ] {
+            request["groups"][0]["selectedHypothesisEditorId"] = json!(selection);
+            let output = generate(&request).unwrap();
+            let actual: Vec<_> = output["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|record| record["text"].as_str().unwrap())
+                .collect();
+            assert_eq!(actual, texts);
+            assert_eq!(output["stats"]["hardRejections"], rejections);
+            assert_eq!(output["stop"], "completed");
+            assert_eq!(output["hypothesisBindings"].as_array().unwrap().len(), 2);
+            assert_accounting(&output);
+        }
+    }
+
+    #[test]
+    fn exclusive_soft_selection_scores_only_the_selected_hypothesis_once() {
+        let mut request = grouped_fixture();
+        request["seeds"] = json!(["AB"]);
+        request["hypotheses"][0]["effects"]
+            .as_array_mut()
+            .unwrap()
+            .push(effect(106, json!({"type":"length","min":2,"max":2})));
+        for row in request["hypotheses"].as_array_mut().unwrap() {
+            row["applicability"] = json!("soft");
+        }
+        request["hypotheses"][1]["confidence"] = json!("high");
+        for (selection, points, matched_index) in [
+            (Some(102), 2, Some(0)),
+            (Some(104), 3, Some(1)),
+            (None, 0, None),
+        ] {
+            request["groups"][0]["selectedHypothesisEditorId"] = json!(selection);
+            let output = generate(&request).unwrap();
+            assert_eq!(output["candidates"][0]["relativePoints"], points);
+            let expected = matched_index.map_or_else(
+                || json!([]),
+                |index| json!([output["hypothesisBindings"][index]["hypothesisId"]]),
+            );
+            assert_eq!(
+                output["candidates"][0]["matchedSoftHypothesisIds"],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn multiple_groups_independent_and_direct_conditions_share_hard_and_soft_scenario() {
+        let mut request = grouped_fixture();
+        request["seeds"] = json!(["Ab1", "Ab2", "AB1", "Zb1"]);
+        request["hypotheses"][0]["effects"] = json!([
+            effect(103, json!({"type":"contains","literal":"b"})),
+            effect(107, json!({"type":"suffix","literal":"1"}))
+        ]);
+        request["hypotheses"][0]["applicability"] = json!("soft");
+        let mut second_group_member = hypothesis(
+            108,
+            101,
+            vec![effect(109, json!({"type":"prefix","literal":"A"}))],
+        );
+        second_group_member["groupEditorId"] = json!(202);
+        second_group_member["enabled"] = json!(false);
+        request["hypotheses"]
+            .as_array_mut()
+            .unwrap()
+            .push(second_group_member);
+        let mut independent = hypothesis(
+            110,
+            101,
+            vec![effect(111, json!({"type":"length","min":3,"max":3}))],
+        );
+        independent["applicability"] = json!("soft");
+        independent["confidence"] = json!("high");
+        request["hypotheses"]
+            .as_array_mut()
+            .unwrap()
+            .push(independent);
+        request["groups"]
+            .as_array_mut()
+            .unwrap()
+            .extend([group(202, 101, Some(108)), group(203, 101, None)]);
+        request["directConstraints"] =
+            json!([condition(1, json!({"type":"notContains","literal":"2"}))]);
+        let output = generate(&request).unwrap();
+        assert_eq!(output["candidates"].as_array().unwrap().len(), 2);
+        assert_eq!(output["candidates"][0]["text"], "Ab1");
+        assert_eq!(output["candidates"][1]["text"], "AB1");
+        assert_eq!(output["candidates"][0]["relativePoints"], 5);
+        assert_eq!(output["candidates"][1]["relativePoints"], 3);
+        let bindings = output["hypothesisBindings"].as_array().unwrap();
+        assert_eq!(
+            output["candidates"][0]["matchedSoftHypothesisIds"],
+            json!([bindings[0]["hypothesisId"], bindings[3]["hypothesisId"]])
+        );
+        assert_eq!(output["stats"]["hardRejections"], 2);
+        assert_accounting(&output);
+        request["groups"][1]["selectedHypothesisEditorId"] = json!(null);
+        let none = generate(&request).unwrap();
+        assert_eq!(none["candidates"].as_array().unwrap().len(), 3);
+        assert_eq!(none["candidates"][2]["text"], "Zb1");
+        // Independent disabled rows stay inactive alongside selected members.
+        request["hypotheses"][3]["enabled"] = json!(false);
+        assert_eq!(
+            generate(&request).unwrap()["candidates"][0]["relativePoints"],
+            2
+        );
+    }
+
+    #[test]
+    fn selected_grouped_hard_supports_all_seven_constraints_and_zero_effects() {
+        for (constraint, matching, rejected) in [
+            (json!({"type":"length","min":2,"max":2}), "Ab", "Abc"),
+            (
+                json!({"type":"position","index":2,"allowed":"bB"}),
+                "Ab",
+                "Ac",
+            ),
+            (json!({"type":"contains","literal":"b"}), "Ab", "AB"),
+            (json!({"type":"notContains","literal":"b"}), "AB", "Ab"),
+            (json!({"type":"prefix","literal":"A"}), "Ab", "aB"),
+            (json!({"type":"suffix","literal":"b"}), "Ab", "AB"),
+            (
+                json!({"type":"characterCount","class":"digit","min":1,"max":1}),
+                "A1",
+                "AB",
+            ),
+        ] {
+            let mut request = grouped_fixture();
+            request["seeds"] = json!([matching, rejected]);
+            request["hypotheses"][0]["effects"][0]["constraint"] = constraint;
+            let output = generate(&request).unwrap();
+            assert_eq!(output["candidates"].as_array().unwrap().len(), 1);
+            assert_eq!(output["candidates"][0]["text"], matching);
+            assert_eq!(output["stats"]["hardRejections"], 1);
+        }
+        for applicability in ["hard", "soft"] {
+            let mut request = grouped_fixture();
+            request["hypotheses"][0]["effects"] = json!([]);
+            request["hypotheses"][0]["applicability"] = json!(applicability);
+            let output = generate(&request).unwrap();
+            assert_eq!(output["candidates"].as_array().unwrap().len(), 4);
+            assert_eq!(output["candidates"][0]["relativePoints"], 0);
+            assert_eq!(
+                output["candidates"][0]["matchedSoftHypothesisIds"],
+                json!([])
+            );
+        }
+        let mut empty = fixture();
+        empty["clues"] = json!([clue(101)]);
+        empty["groups"] = json!([group(201, 101, None)]);
+        assert_eq!(generate(&empty).unwrap()["candidates"][0]["text"], "Ab");
+    }
+
+    #[test]
+    fn group_references_membership_and_selections_reject_missing_wrong_kinds_and_cross_clue() {
+        let mut valid = grouped_fixture();
+        valid["directConstraints"] =
+            json!([condition(1, json!({"type":"length","min":1,"max":64}))]);
+        for pointer in ["/groups/0/clueEditorId", "/hypotheses/0/groupEditorId"] {
+            let wrong_ids = if pointer == "/groups/0/clueEditorId" {
+                vec![0, 1, 102, 103, 201, 999]
+            } else {
+                vec![0, 1, 101, 102, 103, 999]
+            };
+            for bad in wrong_ids {
+                let mut request = valid.clone();
+                *request.pointer_mut(pointer).unwrap() = json!(bad);
+                assert_invalid(request);
+            }
+        }
+        for bad in [0, 1, 101, 103, 201, 999] {
+            let mut request = valid.clone();
+            request["groups"][0]["selectedHypothesisEditorId"] = json!(bad);
+            assert_invalid(request);
+        }
+        let mut nonmember = valid.clone();
+        nonmember["hypotheses"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("groupEditorId");
+        nonmember["groups"][0]["selectedHypothesisEditorId"] = json!(104);
+        assert_invalid(nonmember);
+        let mut cross_clue = valid.clone();
+        cross_clue["clues"].as_array_mut().unwrap().push(clue(106));
+        cross_clue["hypotheses"][1]["clueEditorId"] = json!(106);
+        assert_invalid(cross_clue);
+        let mut other_group = valid.clone();
+        other_group["groups"]
+            .as_array_mut()
+            .unwrap()
+            .push(group(202, 101, Some(102)));
+        assert_invalid(other_group);
+        let mut enabled = valid.clone();
+        enabled["hypotheses"][1]["enabled"] = json!(true);
+        assert_invalid(enabled);
+        // Unselected records and effects are validated before Core resolution.
+        let mut invalid_effect = valid.clone();
+        invalid_effect["hypotheses"][1]["effects"][0]["constraint"]["literal"] = json!("");
+        assert_invalid(invalid_effect);
+        let mut empty = valid;
+        empty["hypotheses"] = json!([]);
+        assert_invalid(empty);
+    }
+
+    #[test]
+    fn group_dto_distinguishes_omitted_membership_from_null_and_requires_explicit_selection() {
+        let valid = grouped_fixture();
+        for pointer in [
+            "/hypotheses/0/groupEditorId",
+            "/groups/0/editorId",
+            "/groups/0/clueEditorId",
+        ] {
+            for bad in [
+                json!(null),
+                json!(0),
+                json!(-1),
+                json!(1.5),
+                json!("201"),
+                json!(true),
+                json!(4294967296_u64),
+            ] {
+                let mut request = valid.clone();
+                *request.pointer_mut(pointer).unwrap() = bad;
+                assert_invalid(request);
+            }
+        }
+        for bad in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("102"),
+            json!(false),
+            json!([]),
+            json!(4294967296_u64),
+        ] {
+            let mut request = valid.clone();
+            request["groups"][0]["selectedHypothesisEditorId"] = bad;
+            assert_invalid(request);
+        }
+        for field in ["editorId", "clueEditorId", "selectedHypothesisEditorId"] {
+            let mut request = valid.clone();
+            request["groups"][0].as_object_mut().unwrap().remove(field);
+            assert_invalid(request);
+        }
+        let mut unknown = valid.clone();
+        unknown["groups"][0]["members"] = json!([102, 104]);
+        assert_invalid(unknown);
+        let mut null_groups = valid.clone();
+        null_groups["groups"] = json!(null);
+        assert_invalid(null_groups);
+        for selected in [json!(102), json!(104), json!(null)] {
+            let mut request = valid.clone();
+            request["groups"][0]["selectedHypothesisEditorId"] = selected;
+            assert!(generate(&request).is_ok());
+        }
+        assert!(generate(&fixture()).is_ok());
+    }
+
+    #[test]
+    fn group_editor_ids_share_the_global_namespace_and_json_duplicates_are_rejected() {
+        let mut valid = grouped_fixture();
+        valid["directConstraints"] =
+            json!([condition(1, json!({"type":"length","min":1,"max":64}))]);
+        for duplicate in [1, 101, 102, 103, 104, 105] {
+            let mut request = valid.clone();
+            request["groups"][0]["editorId"] = json!(duplicate);
+            for row in request["hypotheses"].as_array_mut().unwrap() {
+                row["groupEditorId"] = json!(duplicate);
+            }
+            assert_invalid(request);
+        }
+        let mut duplicate_group = valid.clone();
+        duplicate_group["groups"]
+            .as_array_mut()
+            .unwrap()
+            .push(group(201, 101, None));
+        assert_invalid(duplicate_group);
+        for pointer in ["/groups/0", "/hypotheses/0"] {
+            let object = valid.pointer(pointer).unwrap().as_object().unwrap();
+            for (field, value) in object {
+                let original = serde_json::to_string(valid.pointer(pointer).unwrap()).unwrap();
+                let duplicate = format!(
+                    "{{{}:{},{}",
+                    serde_json::to_string(field).unwrap(),
+                    value,
+                    &original[1..]
+                );
+                let raw = serde_json::to_string(&valid)
+                    .unwrap()
+                    .replacen(&original, &duplicate, 1);
+                assert_eq!(
+                    generate_preview(raw.into_bytes()),
+                    Err(PreviewError::InvalidRequest)
+                );
+            }
+        }
+        let serialized = serde_json::to_string(&valid).unwrap();
+        let duplicate = serialized.replacen("\"groups\":", "\"groups\":[],\"groups\":", 1);
+        assert_eq!(
+            generate_preview(duplicate.into_bytes()),
+            Err(PreviewError::InvalidRequest)
+        );
+    }
+
     #[test]
     fn clue_project_preserves_evidence_interpretations_origins_and_effect_identity() {
         let mut request = clue_fixture();
@@ -1931,6 +2370,7 @@ mod tests {
             decoded.direct_constraints,
             decoded.clues,
             decoded.hypotheses,
+            decoded.groups,
         )
         .unwrap();
         assert!(direct.is_empty());
@@ -2132,6 +2572,78 @@ mod tests {
     }
 
     #[test]
+    fn eight_groups_and_136_core_ids_preserve_bindings_and_recompute_with_seeds() {
+        let mut request = maximum_entity_request();
+        request["groups"] = json!(
+            (0..8)
+                .map(|index| group(49 + index, 17 + index, Some(25 + index)))
+                .collect::<Vec<_>>()
+        );
+        for (index, row) in request["hypotheses"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            row["enabled"] = json!(false);
+            row["groupEditorId"] = json!(49 + index);
+        }
+        for seed_count in [64, 1] {
+            request["seeds"] = json!(vec!["Ab"; seed_count]);
+            let decoded: PreviewRequest =
+                serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+            decoded.validate().unwrap();
+            check_canonical_budget(&decoded).unwrap();
+            let (raw, direct, hypotheses) = build_project(
+                decoded.seeds,
+                decoded.direct_constraints,
+                decoded.clues,
+                decoded.hypotheses,
+                decoded.groups,
+            )
+            .unwrap();
+            let mut ids = BTreeSet::new();
+            ids.extend(raw.manual_seeds.iter().map(|seed| seed.id));
+            ids.extend(raw.clues.iter().map(|clue| clue.id));
+            for row in &raw.hypotheses {
+                assert!(ids.insert(row.id));
+                for effect in &row.effects {
+                    let Effect::Constraint(effect) = effect else {
+                        panic!("constraint expected")
+                    };
+                    assert!(ids.insert(effect.id));
+                }
+            }
+            for (index, group) in raw.alternative_groups.iter().enumerate() {
+                assert!(ids.insert(group.id));
+                assert_eq!(group.id, Id((seed_count + 65 + index) as u32));
+                assert_eq!(group.selected, Some(raw.hypotheses[16 + index].id));
+                assert_eq!(
+                    raw.hypotheses[16 + index].activation,
+                    Activation::Grouped { group_id: group.id }
+                );
+            }
+            assert_eq!(ids.len(), seed_count + 72);
+            assert_eq!(ids.last(), Some(&Id((seed_count + 72) as u32)));
+            assert_eq!(direct[0].hypothesis_id, seed_count as u32 + 1);
+            assert_eq!(hypotheses[0].hypothesis_id, seed_count as u32 + 41);
+            let validated = raw.validate().unwrap();
+            assert_eq!(validated.resolve().active_hypotheses().len(), 24);
+            let output = generate(&request).unwrap();
+            assert_eq!(
+                output["hypothesisBindings"][0]["hypothesisId"],
+                seed_count as u32 + 41
+            );
+            assert_accounting(&output);
+        }
+        request["groups"]
+            .as_array_mut()
+            .unwrap()
+            .push(group(1000, 17, None));
+        assert_invalid(request);
+    }
+
+    #[test]
     fn maximum_128_core_ids_are_unique_and_reallocated_when_seed_count_changes() {
         let mut request = maximum_entity_request();
         for seed_count in [64, 1] {
@@ -2143,6 +2655,7 @@ mod tests {
                 decoded.direct_constraints,
                 decoded.clues,
                 decoded.hypotheses,
+                decoded.groups,
             )
             .unwrap();
             let mut ids = BTreeSet::new();
@@ -2221,6 +2734,7 @@ mod tests {
                 decoded.direct_constraints,
                 decoded.clues,
                 decoded.hypotheses,
+                decoded.groups,
             )
             .unwrap();
             assert_eq!(raw.clues[0].text, text);
@@ -2413,7 +2927,8 @@ mod tests {
             value["limits"],
             value.get("directConstraints").unwrap_or(&json!([])),
             value.get("clues").unwrap_or(&json!([])),
-            value.get("hypotheses").unwrap_or(&json!([]))
+            value.get("hypotheses").unwrap_or(&json!([])),
+            value.get("groups").unwrap_or(&json!([]))
         ])
     }
 
@@ -2429,6 +2944,35 @@ mod tests {
         ]);
         positional[6][0] = json!([102,101,canonical["hypotheses"][0]["interpretation"],true,{"hard":null},{"medium":null},[[103,{"type":"contains","literal":"A"}]]]);
         assert_eq!(generate(&positional).unwrap(), expected);
+    }
+
+    #[test]
+    fn grouped_positional_and_enum_map_representations_keep_strict_selection_presence() {
+        let canonical = grouped_fixture();
+        let expected = generate(&canonical).unwrap();
+        let mut positional = positional_request(&canonical);
+        for index in 0..2 {
+            let row = &canonical["hypotheses"][index];
+            positional[6][index] = json!([
+                row["editorId"],row["clueEditorId"],row["interpretation"],false,
+                {"hard":null},{"medium":null},row["effects"],201
+            ]);
+        }
+        positional[7][0] = json!([201, 101, 102]);
+        assert_eq!(generate(&positional).unwrap(), expected);
+        positional[7][0] = json!([201, 101, null]);
+        assert_eq!(
+            generate(&positional).unwrap()["candidates"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        positional[7][0] = json!([201, 101]);
+        assert_invalid(positional.clone());
+        positional[7][0] = json!([201, 101, 102]);
+        positional[6][0][7] = json!(null);
+        assert_invalid(positional);
     }
 
     fn near_request_budget() -> Value {
@@ -2448,7 +2992,7 @@ mod tests {
             .collect();
         let mut request = fixture();
         request["requestId"] = json!("x".repeat(32));
-        request["seeds"] = json!(vec![escaped; 64]);
+        request["seeds"] = json!(vec![escaped; 63]);
         request["options"] = json!({"caseVariants":["original","asciiLowercase","asciiUppercase"],"prefixes":affixes,"suffixes":affixes});
         request["limits"] = json!({"attemptLimit":4096,"emissionLimit":100});
         request["directConstraints"] = json!(
@@ -2460,7 +3004,11 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         request["clues"] = json!([{"editorId":1,"text":"","source":""}]);
-        request["hypotheses"] = json!([]);
+        request["hypotheses"] = json!([{
+            "editorId":2,"clueEditorId":1,"interpretation":"","enabled":false,
+            "applicability":"hard","confidence":"low","effects":[],"groupEditorId":3
+        }]);
+        request["groups"] = json!([group(3, 1, Some(2))]);
         let typed: PreviewRequest = serde_json::from_value(request.clone()).unwrap();
         let remaining = MAX_REQUEST_BYTES - serde_json::to_vec(&typed).unwrap().len();
         assert!(remaining <= MAX_CLUE_TEXT_BYTES);
@@ -2471,6 +3019,14 @@ mod tests {
     #[test]
     fn raw_and_canonical_budgets_accept_16384_and_reject_16385_bytes() {
         let mut request = near_request_budget();
+        let exact_text = request["clues"][0]["text"].as_str().unwrap().to_owned();
+        request["clues"][0]["text"] = json!(&exact_text[..exact_text.len() - 1]);
+        let below: PreviewRequest = serde_json::from_value(request.clone()).unwrap();
+        let bytes = serde_json::to_vec(&below).unwrap();
+        assert_eq!(bytes.len(), 16383);
+        assert!(bounded_body(&InvokeBody::Raw(bytes.clone())).is_ok());
+        assert!(generate_preview(bytes).is_ok());
+        request["clues"][0]["text"] = json!(exact_text);
         let typed: PreviewRequest = serde_json::from_value(request.clone()).unwrap();
         let bytes = serde_json::to_vec(&typed).unwrap();
         assert_eq!(bytes.len(), 16384);
