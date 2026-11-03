@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-probe",
-  "description": "Allow only the main local application window to run the synthetic Core probe and bounded candidate preview.",
+  "description": "Allow only the main local application window to run the Core probe, bounded Preview, and scoped encrypted project operations.",
   "local": true,
   "windows": ["main"],
-  "permissions": ["allow-core-probe", "allow-candidate-preview"]
+  "permissions": ["allow-core-probe", "allow-candidate-preview", "allow-project-open", "allow-project-save"]
 }

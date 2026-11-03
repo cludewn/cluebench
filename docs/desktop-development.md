@@ -26,8 +26,15 @@ apps/desktop/
   src/unicode-text.ts         Unicode scalar and UTF-8 evidence validation
   src/preview-input.ts        Shared input bounds and request construction
   src/preview-bridge.ts       Raw request encoding, response checks, safe errors
+  src/project-document.ts    Versioned authoring mapping, UUIDs, validation
+  src/project-bridge.ts      Bounded project Raw IPC and fixed errors
+  src/ProjectControls.tsx    Save/Open prompts, binding, dirty baseline
   src/core-bridge.ts          Auxiliary probe bridge and safe errors
   src-tauri/src/preview.rs    Bounded worker, DTOs, Core generation, single-flight
+  src-tauri/src/project.rs    Single-flight project commands and opaque registry
+  src-tauri/src/project_document.rs  Strict versioned authoring contract
+  src-tauri/src/project_crypto.rs  Bounded age passphrase encryption
+  src-tauri/src/project_fs/   Handle-relative Linux/ext4 and Windows/NTFS I/O
   src-tauri/src/probe.rs      Synthetic Core operation and small response DTO
   src-tauri/src/lib.rs        Command registration and application startup
   src-tauri/build.rs          Tauri build and custom-command ACL registration
@@ -91,6 +98,13 @@ metadata and downloaded Cargo manifests:
 | `tauri-build` | 2.7.4 | Build-time config, assets, ACL | MIT OR Apache-2.0 |
 | `serde` | 1.0.229 | Preview request/response/error serialization | MIT OR Apache-2.0 |
 | `serde_json` | 1.0.154 | Preview JSON parsing/serialization and test assertions | MIT OR Apache-2.0 |
+| `tauri-plugin-dialog` | 2.8.4 | Rust-only native project dialogs | Apache-2.0 OR MIT |
+| `age` | 0.12.1 | Standard binary age passphrase encryption; default features disabled | Apache-2.0 OR MIT |
+| `uuid` | 1.29.0 | Opaque binding tokens and random ciphertext temp names | Apache-2.0 OR MIT |
+| `zeroize` | 1.9.1 | Plaintext buffer cleanup and secret dependencies | Apache-2.0 OR MIT |
+| `rustix` | 1.1.4 | Linux handle-relative filesystem and rename operations | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| `windows-sys` | 0.61.2 | Windows NT handles, filesystem checks, and native handle-relative rename | MIT OR Apache-2.0 |
+| `tempfile` | 3.23.0 | Test-only isolated filesystem directories | MIT OR Apache-2.0 |
 | `@tauri-apps/api`, `@tauri-apps/cli` | 2.12.4 | Supported JS IPC API and native build CLI | MIT OR Apache-2.0 |
 | `react`, `react-dom` | 19.3.1 | SPA rendering and local UI state | MIT |
 | `typescript` | 7.0.2 | Static type checking | Apache-2.0 |
@@ -152,6 +166,14 @@ the resolver adjustment. See the [execution record](desktop-verification.md)
 for the failed attempt, successful retry and nonfatal WSLg graphics warnings.
 
 ## Windows native prerequisites
+
+Windows MSVC builds use `src-tauri/windows-app-manifest.xml` for the Common
+Controls v6 dependency required by native dialogs. `build.rs` embeds it through
+linker arguments in both the application and library unit test executables;
+the Tauri resource manifest is omitted to avoid embedding it twice. Application
+icons, version resources, and command ACL generation still use `tauri-build`.
+The Windows project tests check the process's Common Controls activation without
+opening a dialog. Compilation alone does not verify this loader requirement.
 
 Use a separate native Windows checkout and native Windows Node/pnpm/Rust tools.
 Do not reuse Linux `node_modules` or Cargo artifacts for Windows compilation.
@@ -298,7 +320,7 @@ with exact confidence-point arithmetic and complete binding validation, without
 matching candidate strings. Later draft values never reinterpret a response.
 
 A single monotonically increasing nonzero `u32` editor allocator spans Direct
-Constraints, Clues, Hypotheses, effects, and groups without reuse after deletion or Clear.
+Constraints, Clues, Hypotheses, effects, groups, and affix rows without reuse after deletion, Clear, or Open.
 Rust separately assigns request-local Core IDs in Seed, Direct Hypothesis/effect,
 Clue, Clue-backed Hypothesis/effects, then group order, with a maximum ID of 136.
 Editor-to-Core group and Hypothesis maps are independent; no client Core IDs are
@@ -347,14 +369,17 @@ flat editor-ID keys preserve composing input nodes. Clear empties all lists
 including groups, remounts SeedInput, and retains editor/request sequences and
 active worker ownership. Guard cleanup, unstarted composition-end rejection,
 and affix stable row IDs preserve IME lifecycle. Clear does not cancel Rust.
-A complete Project Workspace, persistence, and export remain unavailable.
+A complete multi-project Workspace and export remain unavailable. Explicit encrypted
+project Save/Save As/Open are documented in [the project-file contract](project-files.md).
 
 ## Command ACL, CSP, and privacy
 
 Registering an `invoke_handler` alone does not limit custom commands by window.
-`build.rs` explicitly enrolls `core_probe` and `candidate_preview` with
+`build.rs` explicitly enrolls `core_probe`, `candidate_preview`, `project_open`,
+and `project_save` with
 `tauri_build::AppManifest::commands`, generating their allow/deny permissions during the build. `capabilities/main-probe.json` grants only
-`allow-core-probe` and `allow-candidate-preview`, only to the exact window label `main`, and only for local
+`allow-core-probe`, `allow-candidate-preview`, `allow-project-open`, and
+`allow-project-save`, only to the exact window label `main`, and only for local
 application content. There is no remote-origin capability, wildcard window, or
 `core:default` permission. The config selects that one capability explicitly.
 Generated schemas and permissions are build artifacts, not hand-maintained
@@ -373,10 +398,12 @@ Those allowances do not appear in the production CSP. The production window
 loads bundled `index.html` from `frontendDist`; it does not navigate to remote
 application content. See [Tauri CSP](https://v2.tauri.app/security/csp/).
 
-No Tauri plugins, filesystem/shell/network commands, telemetry, analytics,
-authentication, updater, or secret-bearing logs are added. Tests use only
-synthetic fixtures. Clue text/source, interpretations, constraints, Seeds, and
-candidates exist in memory and local IPC only; Clear does not promise secure erasure. Raw IPC limits application
+The native dialog plugin is initialized for Rust API use, without JS dialog or
+generic filesystem permissions. Its transitive filesystem crate supplies shared
+path types; the filesystem plugin is not initialized. No shell/network commands,
+telemetry, analytics, updater, or secret-bearing logs are added. Tests use only
+synthetic fixtures. Explicit saves persist authoring data encrypted; candidate
+results remain in memory and local IPC. Clear does not promise secure erasure. Raw IPC limits application
 DTO parsing, not prior WebView/transport allocations or a compromised renderer.
 Rust tests exercise the generated ACL with Tauri's mock runtime:
 the real handler/Core result is allowed for local `main`, denied for another
@@ -485,7 +512,9 @@ Both jobs install the pinned tools and frontend dependencies and run the native
 Tauri build without installers. Linux additionally checks formatting,
 TypeScript, frontend tests, production assets, Clippy with `-D warnings`, the
 whole Cargo workspace, and the Core alone. Frontend assets are built before
-Rust checks that embed them. The Windows job runs on an actual Windows native
+Rust checks that embed them. Windows additionally runs the encrypted project
+Rust tests, including actual NTFS file operations and mock-runtime command/ACL
+checks, rather than relying on compilation alone. The Windows job runs on an actual Windows native
 runner. See its [documented image tools](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md).
 
 Actions are pinned to commit SHAs, permissions are `contents: read`, checkout
@@ -498,10 +527,49 @@ GitHub Actions PASS.
 The Desktop does not implement a complete Project Workspace, cross-Clue grouping,
 logical OR, automatic exclusivity inference, batch scenario comparison,
 Hypothesis-owned Seed effects, structural
-analysis UI, structure canvas, export, persistence/migration/encryption, general
+analysis UI, structure canvas, export, automatic schema migration, general
 generation jobs, streaming, interactive cancellation, routing/global state/i18n
 frameworks, final branding, installers, signing, updates, release automation,
 macOS/mobile readiness, CLI/HTTP APIs, stable external Rust APIs, or runtime AI.
 Preview request/revision handling and bounded worker ownership are implemented
 locally without introducing those broader frameworks. Issue #11's glib
 vulnerability investigation remains separate and unresolved by this change.
+
+## Encrypted project verification
+
+See [project files](project-files.md) for schema, raw draft domains, UUID/editor/Core
+identity, independent budgets, age/KDF limits, filesystem admission, commit results,
+and residual privacy risks. Persistence does not change Core semantics.
+
+Run `cargo test -p cluebench-desktop --locked project` for the focused Rust
+project/crypto/parser/filesystem/handler suites. Real filesystem tests require
+local ext4 on Linux or local NTFS on Windows; unsupported temporary locations
+fail rather than silently proving a weaker path. The ignored crash helper is
+invoked by the process-termination test and is not a missing normal test.
+Fault injection does not fill a disk, and process kill does not prove power-loss
+durability. Production scrypt logN18 tests can take several minutes in debug
+builds and serialize KDF work within the test process.
+
+In both native development and production windows, use synthetic data to check:
+
+1. Add evidence, selected and inactive Hypotheses, a same-Clue group, Direct
+   Constraints, incomplete numeric fields, Seed blank lines/TAB/trailing LF, and
+   empty/duplicate/non-ASCII affix rows. Save with matching passphrases to a new
+   admitted location. Verify that cancelling a dialog or phrase prompt retains
+   all current state and that existing destinations are refused.
+2. Open in a later session with the phrase, inspect exact restored fields and
+   selection, and verify that incomplete drafts remain editable but Preview
+   rejects them. Correct the fields and run Preview through real WebView IPC.
+3. Test wrong phrase, altered/truncated ciphertext, and an externally modified
+   associated file. Errors must be fixed, with no path or raw parser contents.
+   Regular Save must authenticate the existing file; Save As must use a new path.
+4. Check Save/Discard/Cancel before Open, Save failure aborting Open, Clear
+   retaining association, and later edits remaining dirty after a saved snapshot.
+   Check the Windows committed-durability warning separately from a failed save.
+5. During authoring and generation-limit IME composition, attempt Save and
+   confirm input remains. Open/Clear must reject late old composition callbacks;
+   removing an affix row must not move its composition into another row.
+6. Open while a Preview is pending where timing permits. The new project must
+   invalidate old success/error without releasing the active worker early.
+   Do not infer native GUI/IME/IPC behavior from jsdom, mock-runtime ACL tests,
+   native compilation, or cross-target checking.
