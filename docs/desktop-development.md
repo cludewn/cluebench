@@ -103,7 +103,7 @@ metadata and downloaded Cargo manifests:
 | `uuid` | 1.29.0 | Opaque binding tokens and random ciphertext temp names | Apache-2.0 OR MIT |
 | `zeroize` | 1.9.1 | Plaintext buffer cleanup and secret dependencies | Apache-2.0 OR MIT |
 | `rustix` | 1.1.4 | Linux handle-relative filesystem and rename operations | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
-| `windows-sys` | 0.61.2 | Windows NT handles, filesystem checks, and FileRenameInfoEx | MIT OR Apache-2.0 |
+| `windows-sys` | 0.61.2 | Windows NT handles, filesystem checks, and native handle-relative rename | MIT OR Apache-2.0 |
 | `tempfile` | 3.23.0 | Test-only isolated filesystem directories | MIT OR Apache-2.0 |
 | `@tauri-apps/api`, `@tauri-apps/cli` | 2.12.4 | Supported JS IPC API and native build CLI | MIT OR Apache-2.0 |
 | `react`, `react-dom` | 19.3.1 | SPA rendering and local UI state | MIT |

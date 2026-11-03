@@ -156,10 +156,49 @@ fn read_plaintext(mut reader: impl Read) -> Result<Zeroizing<Vec<u8>>, ProjectEr
 pub(crate) static CRYPTO_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
+fn recover_crypto_test_lock(lock: &std::sync::Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+    // The lock only serializes KDF scratch allocation. It protects no data that
+    // needs repair after another test panics; keep later failures independent.
+    lock.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+pub(crate) fn crypto_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    recover_crypto_test_lock(&CRYPTO_TEST_LOCK)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn phrase(value: &str) -> SecretString {
         SecretString::from(value.to_owned())
+    }
+    #[test]
+    fn poisoned_kdf_test_lock_recovers_without_releasing_mutual_exclusion() {
+        let lock = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let panicking_lock = std::sync::Arc::clone(&lock);
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = panicking_lock.lock().unwrap();
+                panic!("Synthetic test lock poison");
+            })
+            .join()
+            .is_err()
+        );
+        assert!(lock.is_poisoned());
+        let guard = recover_crypto_test_lock(&lock);
+        assert!(matches!(
+            lock.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        drop(guard);
+        // A poisoned result contains the newly acquired guard, proving the
+        // recovered guard released the lock when dropped.
+        assert!(matches!(
+            lock.try_lock(),
+            Err(std::sync::TryLockError::Poisoned(_))
+        ));
     }
     #[test]
     fn phrase_preserves_unicode_and_spaces_and_rejects_only_the_contract() {
@@ -235,7 +274,7 @@ mod tests {
     }
     #[test]
     fn standard_age_round_trip_authentication_tampering_and_truncation() {
-        let _guard = CRYPTO_TEST_LOCK.lock().unwrap();
+        let _guard = crypto_test_guard();
         let plaintext = b"Synthetic authoring bytes\n\t\n";
         let encrypted = encrypt(plaintext, phrase("Synthetic test phrase only")).unwrap();
         assert!(encrypted.starts_with(b"age-encryption.org/v1\n-> scrypt "));

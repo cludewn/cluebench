@@ -13,13 +13,14 @@ use std::ptr::{null, null_mut};
 use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows_sys::Wdk::Storage::FileSystem::{
     FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
-    FILE_SYNCHRONOUS_IO_NONALERT, FileFsDeviceInformation, NtCreateFile,
-    NtQueryVolumeInformationFile,
+    FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS,
+    FILE_SYNCHRONOUS_IO_NONALERT, FileFsDeviceInformation, FileRenameInformationEx, NtCreateFile,
+    NtQueryVolumeInformationFile, NtSetInformationFile,
 };
 use windows_sys::Wdk::System::SystemServices::{FILE_FS_DEVICE_INFORMATION, FILE_REMOTE_DEVICE};
 use windows_sys::Win32::Foundation as win;
 use windows_sys::Win32::Foundation::{
-    GetLastError, HANDLE, INVALID_HANDLE_VALUE, OBJ_CASE_INSENSITIVE, STATUS_OBJECT_NAME_NOT_FOUND,
+    HANDLE, INVALID_HANDLE_VALUE, OBJ_CASE_INSENSITIVE, STATUS_OBJECT_NAME_NOT_FOUND,
     STATUS_OBJECT_PATH_NOT_FOUND, UNICODE_STRING,
 };
 use windows_sys::Win32::Storage::FileSystem::*;
@@ -100,39 +101,8 @@ impl Parent {
         target: &OsStr,
         replace: bool,
     ) -> Result<(), FsError> {
-        validate_name(target)?;
-        let target: Vec<u16> = target.encode_wide().collect();
-        let offset = offset_of!(FILE_RENAME_INFO, FileName);
-        let bytes = (offset + target.len() * size_of::<u16>()).max(size_of::<FILE_RENAME_INFO>());
-        // usize storage supplies sufficient alignment for FILE_RENAME_INFO.
-        let mut buffer = vec![0usize; bytes.div_ceil(size_of::<usize>())];
-        let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-        // FILE_RENAME_REPLACE_IF_EXISTS and POSIX_SEMANTICS are documented
-        // FileRenameInfoEx flags. Unsupported APIs fail without a fallback.
-        let flags = if replace { 0x1 | 0x2 } else { 0 };
-        // SAFETY: the aligned allocation covers the fixed header and all UTF-16
-        // filename bytes, and both handles stay live throughout the call.
-        let ok = unsafe {
-            (*info).Anonymous.Flags = flags;
-            (*info).RootDirectory = self.directory.as_raw_handle();
-            (*info).FileNameLength = (target.len() * size_of::<u16>()) as u32;
-            std::ptr::copy_nonoverlapping(
-                target.as_ptr(),
-                buffer.as_mut_ptr().cast::<u8>().add(offset).cast::<u16>(),
-                target.len(),
-            );
-            SetFileInformationByHandle(
-                temp.as_raw_handle(),
-                FileRenameInfoEx,
-                info.cast(),
-                bytes as u32,
-            )
-        };
-        if ok != 0 {
-            return Ok(());
-        }
-        // SAFETY: immediate error query contains no sensitive path information.
-        Err(classify_rename_error(unsafe { GetLastError() }))
+        let (status, completion) = rename_relative(temp, &self.directory, target, replace)?;
+        rename_result(status, completion)
     }
 
     pub(super) fn cleanup(&self, temp: &File, _name: &OsStr) -> Result<(), FsError> {
@@ -150,38 +120,112 @@ impl Parent {
     }
 
     pub(super) fn sync(&self) -> Result<(), FsError> {
-        // No supported directory flush contract is claimed for FileRenameInfoEx.
+        // No supported directory flush contract is claimed for the NT rename.
         // The new file was synced before the visible commit, but the directory
         // rename's power-loss durability remains explicitly uncertain.
         Err(FsError::Io)
     }
 }
 
-fn classify_rename_error(error: u32) -> FsError {
+fn rename_buffer(
+    parent: HANDLE,
+    target: &OsStr,
+    replace: bool,
+) -> Result<(Vec<usize>, u32), FsError> {
+    validate_name(target)?;
+    let target: Vec<u16> = target.encode_wide().collect();
+    let offset = offset_of!(FILE_RENAME_INFORMATION, FileName);
+    let bytes =
+        (offset + target.len() * size_of::<u16>()).max(size_of::<FILE_RENAME_INFORMATION>());
+    // usize storage supplies the native structure's pointer alignment. Only
+    // the byte length below is passed; no trailing NUL belongs to FileName.
+    let mut buffer = vec![0usize; bytes.div_ceil(size_of::<usize>())];
+    let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
+    // SAFETY: the aligned allocation covers the header and all UTF-16 bytes.
+    unsafe {
+        (*info).Anonymous.Flags = if replace {
+            FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS
+        } else {
+            0
+        };
+        (*info).RootDirectory = parent;
+        (*info).FileNameLength = (target.len() * size_of::<u16>()) as u32;
+        std::ptr::copy_nonoverlapping(
+            target.as_ptr(),
+            buffer.as_mut_ptr().cast::<u8>().add(offset).cast::<u16>(),
+            target.len(),
+        );
+    }
+    Ok((buffer, bytes as u32))
+}
+
+fn rename_relative(
+    temp: &File,
+    parent: &File,
+    target: &OsStr,
+    replace: bool,
+) -> Result<(win::NTSTATUS, win::NTSTATUS), FsError> {
+    let (buffer, bytes) = rename_buffer(parent.as_raw_handle(), target, replace)?;
+    let mut completion = IO_STATUS_BLOCK::default();
+    // Call the native user-mode API directly: the Win32 rename wrapper can
+    // reject a non-null RootDirectory with a relative name.
+    // SAFETY: our temp handles use FILE_SYNCHRONOUS_IO_NONALERT, so the call
+    // completes before returning. Both handles, IOSB, and the aligned buffer
+    // remain live throughout it. Class 65 performs normal access checks.
+    let status = unsafe {
+        NtSetInformationFile(
+            temp.as_raw_handle(),
+            &mut completion,
+            buffer.as_ptr().cast(),
+            bytes,
+            FileRenameInformationEx,
+        )
+    };
+    // SAFETY: Status is the NTSTATUS member of the native IO_STATUS_BLOCK.
+    Ok((status, unsafe { completion.Anonymous.Status }))
+}
+
+fn rename_result(status: win::NTSTATUS, completion: win::NTSTATUS) -> Result<(), FsError> {
+    if status == win::STATUS_SUCCESS && completion == win::STATUS_SUCCESS {
+        Ok(())
+    } else if status < 0 {
+        Err(classify_rename_status(status))
+    } else {
+        // Pending, warning, informational, and inconsistent completion results
+        // do not establish a completed commit, even when NT_SUCCESS is true.
+        Err(FsError::OutcomeUnknown)
+    }
+}
+
+fn classify_rename_status(status: win::NTSTATUS) -> FsError {
     // Only explicit collision, access, sharing, unsupported-operation, and
     // invalid-target errors establish a failed install. Unexpected storage,
     // removal, cancellation, or timeout results do not establish no commit.
-    match error {
-        win::ERROR_ALREADY_EXISTS | win::ERROR_FILE_EXISTS => FsError::ExternalChange,
-        win::ERROR_ACCESS_DENIED
-        | win::ERROR_SHARING_VIOLATION
-        | win::ERROR_LOCK_VIOLATION
-        | win::ERROR_DELETE_PENDING
-        | win::ERROR_PRIVILEGE_NOT_HELD
-        | win::ERROR_WRITE_PROTECT => FsError::Io,
-        win::ERROR_INVALID_FUNCTION
-        | win::ERROR_CALL_NOT_IMPLEMENTED
-        | win::ERROR_NOT_SUPPORTED
-        | win::ERROR_INVALID_PARAMETER
-        | win::ERROR_NOT_SAME_DEVICE => FsError::UnsupportedFilesystem,
-        win::ERROR_INVALID_NAME
-        | win::ERROR_BAD_PATHNAME
-        | win::ERROR_FILENAME_EXCED_RANGE
-        | win::ERROR_PATH_NOT_FOUND
-        | win::ERROR_FILE_NOT_FOUND
-        | win::ERROR_DIR_NOT_EMPTY
-        | win::ERROR_DIRECTORY
-        | win::ERROR_CANNOT_MAKE => FsError::InvalidTarget,
+    match status {
+        win::STATUS_OBJECT_NAME_COLLISION => FsError::ExternalChange,
+        win::STATUS_ACCESS_DENIED
+        | win::STATUS_SHARING_VIOLATION
+        | win::STATUS_FILE_LOCK_CONFLICT
+        | win::STATUS_LOCK_NOT_GRANTED
+        | win::STATUS_DELETE_PENDING
+        | win::STATUS_PRIVILEGE_NOT_HELD
+        | win::STATUS_MEDIA_WRITE_PROTECTED
+        | win::STATUS_CANNOT_DELETE => FsError::Io,
+        win::STATUS_NOT_IMPLEMENTED
+        | win::STATUS_INVALID_DEVICE_REQUEST
+        | win::STATUS_INVALID_INFO_CLASS
+        | win::STATUS_NOT_SUPPORTED
+        | win::STATUS_INVALID_PARAMETER
+        | win::STATUS_NOT_SAME_DEVICE => FsError::UnsupportedFilesystem,
+        win::STATUS_OBJECT_NAME_INVALID
+        | win::STATUS_OBJECT_PATH_INVALID
+        | win::STATUS_OBJECT_PATH_SYNTAX_BAD
+        | win::STATUS_NAME_TOO_LONG
+        | win::STATUS_OBJECT_PATH_NOT_FOUND
+        | win::STATUS_OBJECT_NAME_NOT_FOUND
+        | win::STATUS_DIRECTORY_NOT_EMPTY
+        | win::STATUS_NOT_A_DIRECTORY
+        | win::STATUS_FILE_IS_A_DIRECTORY => FsError::InvalidTarget,
         _ => FsError::OutcomeUnknown,
     }
 }
@@ -413,35 +457,228 @@ mod tests {
     }
 
     #[test]
-    fn rename_failure_classifier_only_marks_known_precommit_results() {
-        for error in [win::ERROR_ALREADY_EXISTS, win::ERROR_FILE_EXISTS] {
-            assert_eq!(classify_rename_error(error), FsError::ExternalChange);
+    fn native_rename_buffer_uses_the_documented_layout_and_utf16_byte_length() {
+        let pointer_bytes = size_of::<usize>();
+        assert_eq!(
+            offset_of!(FILE_RENAME_INFORMATION, RootDirectory),
+            pointer_bytes
+        );
+        assert_eq!(
+            offset_of!(FILE_RENAME_INFORMATION, FileNameLength),
+            pointer_bytes * 2
+        );
+        assert_eq!(
+            offset_of!(FILE_RENAME_INFORMATION, FileName),
+            pointer_bytes * 2 + 4
+        );
+        assert_eq!(
+            std::mem::align_of::<FILE_RENAME_INFORMATION>(),
+            pointer_bytes
+        );
+        let parent = std::ptr::without_provenance_mut(0x40);
+        let name = OsStr::new("synthetic-🧩.age");
+        let encoded: Vec<u16> = name.encode_wide().collect();
+        for replace in [false, true] {
+            let (buffer, bytes) = rename_buffer(parent, name, replace).unwrap();
+            assert_eq!(
+                buffer.as_ptr() as usize % std::mem::align_of::<FILE_RENAME_INFORMATION>(),
+                0
+            );
+            assert_eq!(
+                bytes as usize,
+                (offset_of!(FILE_RENAME_INFORMATION, FileName) + encoded.len() * 2)
+                    .max(size_of::<FILE_RENAME_INFORMATION>())
+            );
+            // SAFETY: rename_buffer supplies an aligned allocation covering
+            // the native header and its complete variable-length name.
+            unsafe {
+                let info = &*buffer.as_ptr().cast::<FILE_RENAME_INFORMATION>();
+                assert_eq!(info.RootDirectory, parent);
+                assert_eq!(info.FileNameLength as usize, encoded.len() * 2);
+                assert_eq!(
+                    info.Anonymous.Flags,
+                    if replace {
+                        FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS
+                    } else {
+                        0
+                    }
+                );
+                let actual = std::slice::from_raw_parts(
+                    buffer
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(offset_of!(FILE_RENAME_INFORMATION, FileName))
+                        .cast::<u16>(),
+                    encoded.len(),
+                );
+                assert_eq!(actual, encoded);
+            }
         }
-        for error in [
-            win::ERROR_ACCESS_DENIED,
-            win::ERROR_SHARING_VIOLATION,
-            win::ERROR_PRIVILEGE_NOT_HELD,
+        for invalid in [
+            "",
+            "target.age:stream",
+            r"subdir\target.age",
+            "../target.age",
         ] {
-            assert_eq!(classify_rename_error(error), FsError::Io);
+            assert_eq!(
+                rename_buffer(parent, OsStr::new(invalid), false).err(),
+                Some(FsError::InvalidTarget)
+            );
         }
-        for error in [win::ERROR_NOT_SUPPORTED, win::ERROR_INVALID_PARAMETER] {
-            assert_eq!(classify_rename_error(error), FsError::UnsupportedFilesystem);
+    }
+
+    #[test]
+    fn native_relative_rename_creates_refuses_collision_and_replaces_without_losing_old_handles() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("synthetic.age");
+        let (parent, name) = Parent::at(&target).unwrap();
+        let mut first = parent.create(OsStr::new("first.tmp")).unwrap();
+        first.write_all(b"old synthetic ciphertext").unwrap();
+        first.sync_all().unwrap();
+        let created = rename_relative(&first, &parent.directory, &name, false).unwrap();
+        assert_eq!(
+            created,
+            (win::STATUS_SUCCESS, win::STATUS_SUCCESS),
+            "Native new rename NTSTATUS / IOSB"
+        );
+        assert_eq!(rename_result(created.0, created.1), Ok(()));
+        assert_eq!(std::fs::read(&target).unwrap(), b"old synthetic ciphertext");
+        // Keep the old object open with delete sharing; replacement must leave
+        // this handle on the old object and install the new object at the name.
+        drop(first);
+        let mut old = std::fs::File::open(&target).unwrap();
+        let mut next = parent.create(OsStr::new("next.tmp")).unwrap();
+        next.write_all(b"new synthetic ciphertext").unwrap();
+        next.sync_all().unwrap();
+        let collision = rename_relative(&next, &parent.directory, &name, false).unwrap();
+        assert_eq!(
+            collision.0,
+            win::STATUS_OBJECT_NAME_COLLISION,
+            "Native no-replace rename NTSTATUS"
+        );
+        assert_eq!(
+            rename_result(collision.0, collision.1),
+            Err(FsError::ExternalChange)
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"old synthetic ciphertext");
+        assert_eq!(
+            std::fs::read(dir.path().join("next.tmp")).unwrap(),
+            b"new synthetic ciphertext"
+        );
+        let replaced = rename_relative(&next, &parent.directory, &name, true).unwrap();
+        assert_eq!(
+            replaced,
+            (win::STATUS_SUCCESS, win::STATUS_SUCCESS),
+            "Native replacement NTSTATUS / IOSB"
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"new synthetic ciphertext");
+        let mut retained = Vec::new();
+        std::io::Read::read_to_end(&mut old, &mut retained).unwrap();
+        assert_eq!(retained, b"old synthetic ciphertext");
+        assert!(!dir.path().join("next.tmp").exists());
+    }
+
+    #[test]
+    fn native_rename_failure_preserves_an_existing_directory_and_source() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("existing");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(
+            target.join("synthetic.age"),
+            b"existing synthetic ciphertext",
+        )
+        .unwrap();
+        let (parent, name) = Parent::at(&target).unwrap();
+        let mut source = parent.create(OsStr::new("source.tmp")).unwrap();
+        source
+            .write_all(b"replacement synthetic ciphertext")
+            .unwrap();
+        source.sync_all().unwrap();
+        let failed = rename_relative(&source, &parent.directory, &name, true).unwrap();
+        assert!(
+            failed.0 < 0,
+            "Replacing a directory with a file must fail, NTSTATUS={:#010x}",
+            failed.0
+        );
+        assert!(
+            matches!(
+                rename_result(failed.0, failed.1),
+                Err(FsError::InvalidTarget | FsError::ExternalChange | FsError::Io)
+            ),
+            "Native directory replacement NTSTATUS / IOSB = {:#010x} / {:#010x}",
+            failed.0,
+            failed.1
+        );
+        assert_eq!(
+            std::fs::read(target.join("synthetic.age")).unwrap(),
+            b"existing synthetic ciphertext"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("source.tmp")).unwrap(),
+            b"replacement synthetic ciphertext"
+        );
+    }
+
+    #[test]
+    fn rename_status_classifier_only_marks_known_precommit_results() {
+        assert_eq!(
+            rename_result(win::STATUS_SUCCESS, win::STATUS_SUCCESS),
+            Ok(())
+        );
+        assert_eq!(
+            classify_rename_status(win::STATUS_OBJECT_NAME_COLLISION),
+            FsError::ExternalChange
+        );
+        for status in [
+            win::STATUS_ACCESS_DENIED,
+            win::STATUS_SHARING_VIOLATION,
+            win::STATUS_PRIVILEGE_NOT_HELD,
+            win::STATUS_CANNOT_DELETE,
+        ] {
+            assert_eq!(classify_rename_status(status), FsError::Io);
+        }
+        for status in [
+            win::STATUS_NOT_SUPPORTED,
+            win::STATUS_INVALID_PARAMETER,
+            win::STATUS_INVALID_INFO_CLASS,
+        ] {
+            assert_eq!(
+                classify_rename_status(status),
+                FsError::UnsupportedFilesystem
+            );
         }
         assert_eq!(
-            classify_rename_error(win::ERROR_INVALID_NAME),
+            classify_rename_status(win::STATUS_OBJECT_NAME_INVALID),
             FsError::InvalidTarget
         );
-        for error in [
-            win::ERROR_IO_DEVICE,
-            win::ERROR_DEVICE_NOT_CONNECTED,
-            win::ERROR_TIMEOUT,
-            win::ERROR_OPERATION_ABORTED,
-            win::ERROR_FILE_INVALID,
-            win::ERROR_GEN_FAILURE,
-            win::ERROR_UNEXP_NET_ERR,
-            u32::MAX,
+        for status in [
+            win::STATUS_IO_DEVICE_ERROR,
+            win::STATUS_DEVICE_NOT_CONNECTED,
+            win::STATUS_IO_TIMEOUT,
+            win::STATUS_CANCELLED,
+            win::STATUS_FILE_INVALID,
+            win::STATUS_DISK_FULL,
+            win::STATUS_UNSUCCESSFUL,
+            win::STATUS_PENDING,
+            win::STATUS_TIMEOUT,
+            win::STATUS_OBJECT_NAME_EXISTS,
+            win::STATUS_BUFFER_OVERFLOW,
+            -1,
         ] {
-            assert_eq!(classify_rename_error(error), FsError::OutcomeUnknown);
+            assert_eq!(classify_rename_status(status), FsError::OutcomeUnknown);
+            assert_eq!(rename_result(status, status), Err(FsError::OutcomeUnknown));
+        }
+        for completion in [
+            win::STATUS_PENDING,
+            win::STATUS_ACCESS_DENIED,
+            win::STATUS_IO_DEVICE_ERROR,
+        ] {
+            assert_eq!(
+                rename_result(win::STATUS_SUCCESS, completion),
+                Err(FsError::OutcomeUnknown)
+            );
         }
     }
 }

@@ -160,9 +160,17 @@ and is installed in one native rename. New destinations use no-replace;
 regular Save replaces only the current associated object after comparing
 identity and bounded ciphertext. Checks do not rely only on timestamps or size.
 Linux uses handle-relative `openat` and `renameat2`, then syncs the parent
-directory. Windows uses handle-relative `NtCreateFile` and `FileRenameInfoEx`;
-it does not fall back to `ReplaceFileW`. Linux checks temp identity immediately before its name-based rename and
-cleanup. The parent admission rule prevents substitution by another ordinary
+directory. Windows uses handle-relative `NtCreateFile` and
+`NtSetInformationFile(FileRenameInformationEx)`, linked to user-mode
+`ntdll.dll`. The native rename receives the pinned parent handle and a relative
+UTF-16 name directly. It avoids the Win32 wrapper, which can reject this
+root/relative-name combination.
+New destinations use zero rename flags; replacement uses
+`FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS`. Only a completed
+`STATUS_SUCCESS` establishes commit; unexpected statuses remain
+`OutcomeUnknown`. There is no `ReplaceFileW` fallback. Linux checks temp identity
+immediately before its name-based rename and cleanup. The parent admission rule
+prevents substitution by another ordinary
 user; a malicious process with the same UID or root privileges is outside this
 guarantee. Windows renames and cleans up the owned temp handle itself. There is no copy/delete replacement, in-place truncate,
 delete-before-rename, plaintext temp, or automatic backup.

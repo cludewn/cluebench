@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn actual_filesystem_and_crypto_save_open_save_with_transactional_adoption() {
-        let _crypto = project_crypto::CRYPTO_TEST_LOCK.lock().unwrap();
+        let _crypto = project_crypto::crypto_test_guard();
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("synthetic.cluebench");
         let state = ProjectState::default();
