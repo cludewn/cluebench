@@ -390,6 +390,28 @@ fn require_local_ntfs(directory: &File) -> Result<(), FsError> {
 mod tests {
     use super::*;
 
+    #[cfg(target_env = "msvc")]
+    #[test]
+    fn project_test_process_activates_common_controls_v6() {
+        use windows_sys::Win32::Foundation::FreeLibrary;
+        use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+        use windows_sys::core::{s, w};
+
+        // Check the actual process activation context without opening a dialog.
+        // A missing test manifest selects v5, which lacks TaskDialogIndirect.
+        // SAFETY: both names are static, terminated strings. The loaded handle
+        // stays live until the symbol lookup finishes; the symbol is not called.
+        let module = unsafe { LoadLibraryW(w!("comctl32.dll")) };
+        assert!(!module.is_null(), "Common Controls must load");
+        let available = unsafe { GetProcAddress(module, s!("TaskDialogIndirect")) }.is_some();
+        let released = unsafe { FreeLibrary(module) };
+        assert!(
+            available,
+            "The test process must activate Common Controls v6"
+        );
+        assert_ne!(released, 0, "The test must release its module reference");
+    }
+
     #[test]
     fn rename_failure_classifier_only_marks_known_precommit_results() {
         for error in [win::ERROR_ALREADY_EXISTS, win::ERROR_FILE_EXISTS] {

@@ -167,6 +167,14 @@ for the failed attempt, successful retry and nonfatal WSLg graphics warnings.
 
 ## Windows native prerequisites
 
+Windows MSVC builds use `src-tauri/windows-app-manifest.xml` for the Common
+Controls v6 dependency required by native dialogs. `build.rs` embeds it through
+linker arguments in both the application and library unit test executables;
+the Tauri resource manifest is omitted to avoid embedding it twice. Application
+icons, version resources, and command ACL generation still use `tauri-build`.
+The Windows project tests check the process's Common Controls activation without
+opening a dialog. Compilation alone does not verify this loader requirement.
+
 Use a separate native Windows checkout and native Windows Node/pnpm/Rust tools.
 Do not reuse Linux `node_modules` or Cargo artifacts for Windows compilation.
 Install:
